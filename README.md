@@ -1,2 +1,420 @@
-# RAG-system-for-acne-diagnose
-Local-first Acne Advisor AI using RAG, Qdrant, Neo4j, PostgreSQL, FastAPI, React/Vite, Ollama, Gemini, and LlamaParse.
+# Acne Advisor AI
+
+Acne Advisor AI là hệ thống RAG y khoa tập trung vào mụn trứng cá và da liễu. Project chạy theo hướng local-first: frontend React/Vite, backend FastAPI, agent LangGraph, Qdrant cho vector search, Neo4j cho knowledge graph, PostgreSQL cho lịch sử chat, Redis cho cache, Ollama cho model local, Gemini cho sinh câu trả lời/embedding và LlamaParse cho ingestion tài liệu.
+
+## Cảnh Báo Y Khoa
+
+Hệ thống chỉ cung cấp thông tin tham khảo và hỗ trợ học tập/demo. Acne Advisor AI không phải công cụ chẩn đoán, không kê đơn, không thay thế bác sĩ da liễu, bác sĩ sản khoa hoặc cấp cứu. Với triệu chứng nặng như khó thở, sưng môi/mặt, sốt cao, đau quanh mắt, nhìn mờ, choáng hoặc phản ứng thuốc nghiêm trọng, người dùng cần liên hệ cơ sở y tế ngay.
+
+## Mục Tiêu Dự Án
+
+- Xây dựng trợ lý RAG chuyên về mụn, chăm sóc da mụn và thông tin da liễu liên quan.
+- Ingest tài liệu PDF/DOCX thành Markdown, chunks, knowledge graph và vector index.
+- Trả lời tiếng Việt có cấu trúc, có guardrail y khoa và có nguồn từ context truy xuất.
+- Hỗ trợ chạy local với Docker backing services và Ollama.
+- Duy trì cache/resume an toàn cho ingestion và cache câu trả lời cho Phase 2.
+
+## Trạng Thái Hiện Tại
+
+Đã triển khai:
+
+- Frontend React/Vite tại `src/frontend`.
+- FastAPI backend entrypoint: `src.api.app:app`.
+- Endpoint `/chat` với session history, giới hạn input, sửa lỗi UTF-8/mojibake, model selection, fallback metadata và `bypass_cache`.
+- LangGraph agent gồm các node normalize, rewrite, guardrail, cache, retrieve, safety, generate, finalize và cache store.
+- Hybrid retrieval từ Qdrant dense `dense`, sparse `bm25`, RRF fusion, metadata boost và Neo4j graph facts.
+- PostgreSQL lưu `chat_sessions`, `chat_messages` và bảng `patient_records`.
+- Redis answer cache với key prefix `cache:answer:*`.
+- Phase 1 ingestion từ PDF/DOCX sang Markdown, chunks, graph cache, Neo4j, Gemini embeddings và Qdrant.
+- Test chính thức trong `tests/` và smoke/diagnostics scripts trong `scripts/diagnostics/`.
+
+Giới hạn hiện tại:
+
+- Cần cấu hình đúng Docker services, Ollama và API keys.
+- `src/web` và `src/web_legacy` là HTML legacy; frontend đang dùng là `src/frontend`.
+- `pgvector` mới là hướng placeholder; vector store đang dùng thực tế là Qdrant.
+
+## Tech Stack
+
+| Lớp | Công nghệ |
+|---|---|
+| Frontend | React 19, Vite |
+| API | FastAPI, Uvicorn, Pydantic |
+| Agent | LangGraph |
+| LLM | Gemini, Ollama fallback/tuỳ chọn |
+| Local model | Ollama, mặc định `qwen2.5` |
+| Parsing tài liệu | LlamaParse |
+| Embedding | Gemini `models/gemini-embedding-001`, dim `3072` |
+| Vector DB | Qdrant collection `acne_knowledge`, vector `dense`, sparse `bm25` |
+| Graph DB | Neo4j 5 + APOC |
+| Relational DB | PostgreSQL 16 |
+| Cache | Redis 7 |
+| Test | pytest, pytest-asyncio |
+
+## Kiến Trúc Tổng Quan
+
+Docker Compose hiện chỉ chạy backing services: PostgreSQL, Redis, Qdrant và Neo4j. Trong môi trường development, backend FastAPI và frontend React/Vite chạy riêng.
+
+Sơ đồ tuần tự chi tiết được tách riêng tại: [Sơ đồ luồng hoạt động](docs/sequence-diagrams.md).
+
+```text
+User
+  -> React/Vite Frontend
+  -> FastAPI Backend
+  -> LangGraph Agent
+  -> Guardrails / Redis Cache / Hybrid Retriever
+  -> Qdrant + Neo4j
+  -> Gemini hoặc Ollama
+  -> PostgreSQL chat history
+```
+
+## Cấu Trúc Thư Mục
+
+```text
+acne-agent-system/
+├── docs/
+│   └── sequence-diagrams.md
+├── src/
+│   ├── api/                  # FastAPI app, routes, preflight
+│   ├── agent/                # LangGraph workflow, nodes, prompts, LLM provider
+│   ├── cache/                # Redis connection và answer cache
+│   ├── database/             # PostgreSQL, Qdrant, Neo4j access layer
+│   ├── frontend/             # React/Vite web UI đang dùng
+│   ├── ingestion/            # Dermatology metadata helpers
+│   ├── skills/               # Skill registry/base modules
+│   ├── web/                  # Legacy static HTML
+│   └── web_legacy/           # Legacy static HTML copy
+├── scripts/
+│   ├── ingest_knowledge.py   # Phase 1 offline ingestion
+│   ├── init_schema.py        # PostgreSQL + Qdrant bootstrap
+│   ├── init_chat_schema.py   # Chat history schema
+│   ├── clear_redis_cache.py  # Xoá Redis answer cache của app
+│   └── diagnostics/          # Smoke/debug/inspection scripts
+├── tests/                    # pytest tests
+├── data/                     # Runtime volumes/cache, gitignored
+├── sample_data/              # Tài liệu nguồn local, gitignored
+├── docker-compose.yml
+├── requirements.txt
+├── pyproject.toml
+├── .env.example
+└── README.md
+```
+
+## Thành Phần Chính
+
+- **Frontend (`src/frontend`)**: giao diện chat, sidebar lịch sử, ẩn/xoá lịch sử, chọn model, auto fallback và gọi API backend.
+- **FastAPI (`src/api/app.py`)**: endpoint `/chat`, `/health`, `/retrieve`, `/models`, quản lý chat history và input validation.
+- **LangGraph agent (`src/agent`)**: điều phối normalize, rewrite follow-up, guardrail, cache, retrieval, safety check, generate và finalize.
+- **Qdrant**: lưu chunks với vector dense `dense`, sparse `bm25` và payload metadata.
+- **Neo4j**: lưu knowledge graph từ Phase 1, dùng để bổ sung graph facts trong Phase 2.
+- **PostgreSQL**: lưu lịch sử chat và schema phụ.
+- **Redis**: cache câu trả lời hợp lệ, không dùng cho câu có history hoặc ngữ cảnh rủi ro cao.
+- **Ollama**: chạy local model, mặc định `qwen2.5`, dùng trong graph extraction và fallback/generation tuỳ cấu hình.
+- **Gemini**: sinh câu trả lời và embedding.
+- **LlamaParse**: parse PDF/DOCX thành Markdown trong Phase 1.
+
+## Phase 1 Offline Ingestion
+
+Entry point:
+
+```powershell
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py
+```
+
+Luồng chính:
+
+1. Tìm `*.pdf` và `*.docx` trong `SAMPLE_DATA_DIR` hoặc `--source`.
+2. Parse tài liệu bằng LlamaParse sang Markdown.
+3. Cache Markdown trong `data/cache/markdown`.
+4. Chunk Markdown theo header và `CHUNK_SIZE`.
+5. Trích xuất graph bằng Ollama.
+6. Cache graph trong `data/cache/graph` với key gồm version, prompt schema, model, source file, chunk index và chunk hash.
+7. Upsert graph vào Neo4j.
+8. Embed chunks bằng Gemini.
+9. Upsert Qdrant với `dense` và `bm25`.
+
+Lệnh thường dùng:
+
+```powershell
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --limit-files 1 --limit-chunks 5
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --refresh-markdown
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --refresh-graph-cache
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --no-resume-graph-cache
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --clear-graph-cache
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --skip-graph-extraction
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --skip-neo4j
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --skip-qdrant
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --dry-run
+```
+
+## Phase 2 Online Chat/RAG
+
+Entry point:
+
+```powershell
+uvicorn src.api.app:app --reload --port 8000
+```
+
+Luồng chính:
+
+1. Frontend gửi `POST /chat`.
+2. API sửa UTF-8/mojibake, validate input và lock request cùng session.
+3. API nạp history gần nhất từ PostgreSQL nếu cần.
+4. LangGraph rewrite câu follow-up thành câu độc lập khi cần.
+5. Guardrail xử lý out-of-domain, emergency, prompt injection và yêu cầu kê đơn/thuốc nguy cơ cao.
+6. Redis cache lookup bị bỏ qua nếu `bypass_cache=true`, có history hoặc ngữ cảnh không cache được.
+7. Cache miss thì chạy hybrid retrieval: Qdrant dense/sparse, RRF, metadata boost, Neo4j graph facts.
+8. Prompt y khoa được build từ context, graph facts và safety flags.
+9. Gemini/Ollama sinh câu trả lời, có fallback nếu được bật.
+10. Formatter hậu xử lý câu trả lời, thêm disclaimer và metadata.
+11. API lưu chat vào PostgreSQL rồi trả response.
+
+## Hướng Dẫn Cài Đặt
+
+Yêu cầu:
+
+- Python 3.11+
+- Docker Desktop + Docker Compose v2
+- Node.js 20+ cho `src/frontend`
+- Ollama
+- `GOOGLE_API_KEY`
+- `LLAMA_CLOUD_API_KEY`
+
+Cài Python dependencies:
+
+```powershell
+cd C:\Study\SuperRAGSystem\acne-agent-system
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Tạo file môi trường:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Sau đó chỉnh `.env` theo máy local.
+
+## Chạy Docker
+
+```powershell
+docker compose up -d postgres redis qdrant neo4j
+docker ps
+```
+
+Dừng services:
+
+```powershell
+docker compose down
+```
+
+Port mặc định:
+
+| Service | URL |
+|---|---|
+| PostgreSQL | `localhost:5433` |
+| Redis | `localhost:6379` |
+| Qdrant | `http://localhost:6333` |
+| Neo4j HTTP | `http://localhost:7474` |
+| Neo4j Bolt | `bolt://localhost:7687` |
+
+## Chạy Ollama
+
+```powershell
+ollama serve
+ollama pull qwen2.5
+ollama list
+```
+
+Kiểm tra Ollama API:
+
+```powershell
+Invoke-RestMethod http://localhost:11434/api/tags
+```
+
+## Init Schema
+
+```powershell
+.\venv\Scripts\python.exe scripts\init_schema.py
+.\venv\Scripts\python.exe scripts\init_chat_schema.py
+```
+
+`init_schema.py` tạo/validate PostgreSQL và Qdrant collection `acne_knowledge` với `dense=3072` và `bm25`.
+
+`init_chat_schema.py` tạo `chat_sessions`, `chat_messages` và index liên quan bằng `CREATE TABLE IF NOT EXISTS`; script không xoá dữ liệu cũ.
+
+## Chạy Ingestion
+
+Đặt tài liệu vào `sample_data/` hoặc truyền thư mục bằng `--source`.
+
+```powershell
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --source sample_data
+```
+
+Test nhỏ:
+
+```powershell
+$env:CHUNK_SIZE="2000"
+$env:LLM_CONCURRENCY="2"
+$env:INGEST_BATCH_SIZE="16"
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --limit-files 1 --limit-chunks 5 --refresh-graph-cache
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --limit-files 1 --limit-chunks 5
+```
+
+Chạy resume:
+
+```powershell
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py
+```
+
+## Chạy Backend
+
+```powershell
+cd C:\Study\SuperRAGSystem\acne-agent-system
+.\venv\Scripts\Activate.ps1
+uvicorn src.api.app:app --reload --port 8000
+```
+
+Health check:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health | ConvertTo-Json -Depth 20
+```
+
+## Chạy Frontend
+
+```powershell
+cd C:\Study\SuperRAGSystem\acne-agent-system\src\frontend
+npm install
+npm run dev
+```
+
+Frontend thường chạy tại:
+
+```text
+http://localhost:5173
+```
+
+Build:
+
+```powershell
+npm run build
+```
+
+## Endpoint Chính
+
+| Method | Endpoint | Mục đích |
+|---|---|---|
+| `GET` | `/health` | Kiểm tra PostgreSQL, Qdrant, Neo4j, Redis, Ollama |
+| `GET` | `/models` | Danh sách model Gemini/Ollama |
+| `POST` | `/chat` | Chat chính qua LangGraph |
+| `GET` | `/retrieve?q=...&top_k=5` | Debug hybrid retrieval |
+| `GET` | `/chat/sessions` | Danh sách session chat |
+| `DELETE` | `/chat/sessions` | Xoá toàn bộ chat history và Redis answer cache của app |
+| `GET` | `/chat/sessions/{session_id}/messages` | Lấy messages của session |
+| `PATCH` | `/chat/sessions/{session_id}/rename` | Đổi tên session |
+| `PATCH` | `/chat/sessions/{session_id}/hide` | Ẩn session |
+| `POST` | `/chat/sessions/sync` | Đồng bộ local sessions lên PostgreSQL |
+
+Ví dụ gọi `/chat`:
+
+```powershell
+$body = @{
+  message = "mụn trứng cá điều trị thế nào?"
+  bypass_cache = $true
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:8000/chat `
+  -ContentType "application/json; charset=utf-8" `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+```
+
+## Biến Môi Trường Chính
+
+| Biến | Giá trị ví dụ | Vai trò |
+|---|---|---|
+| `GOOGLE_API_KEY` | `...` | Gemini generation và embedding |
+| `GOOGLE_MODEL` | `gemini-2.5-flash` | Model sinh câu trả lời |
+| `LLAMA_CLOUD_API_KEY` | `...` | LlamaParse |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server |
+| `OLLAMA_MODEL` | `qwen2.5` | Graph extraction/fallback |
+| `EMBEDDING_MODEL` | `models/gemini-embedding-001` | Embedding |
+| `EMBEDDING_DIMENSIONS` | `3072` | Validate Qdrant schema |
+| `DATABASE_URL` | `postgresql+asyncpg://user:password@localhost:5433/acne_agent_db` | PostgreSQL |
+| `QDRANT_URL` | `http://localhost:6333` | Qdrant |
+| `QDRANT_COLLECTION_NAME` | `acne_knowledge` | Collection chính |
+| `NEO4J_URI` | `bolt://localhost:7687` | Neo4j |
+| `NEO4J_USERNAME` | `neo4j` | Neo4j user |
+| `NEO4J_PASSWORD` | `password` | Neo4j password |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis |
+| `CACHE_ENABLED` | `true` | Bật/tắt cache |
+| `CACHE_TTL_SECONDS` | `86400` | TTL Redis cache |
+| `CACHE_ANSWER_VERSION` | `v2` | Version cache |
+| `SAMPLE_DATA_DIR` | `./sample_data` | Thư mục tài liệu nguồn |
+| `CHUNK_SIZE` | `2000` | Kích thước chunk |
+| `LLM_CONCURRENCY` | `2` | Concurrency graph extraction |
+| `INGEST_BATCH_SIZE` | `16` | Batch embedding/Qdrant |
+| `GRAPH_BATCH_SIZE` | `50` | Batch graph |
+| `GRAPH_CACHE_VERSION` | `v2` | Version graph cache |
+| `GRAPH_PROMPT_SCHEMA_VERSION` | `clinical_graph_prompt_v2` | Version prompt graph |
+| `MAX_MESSAGE_CHARS` | `500` | Giới hạn input chat |
+| `VITE_API_URL` | `http://localhost:8000` | API base URL frontend |
+
+## Test/Diagnostics
+
+Test chính thức:
+
+```powershell
+.\venv\Scripts\python.exe -m compileall src scripts tests
+.\venv\Scripts\python.exe -m pytest tests -q --no-cov
+```
+
+Diagnostics hữu ích:
+
+```powershell
+.\venv\Scripts\python.exe scripts\diagnostics\smoke_phase2_retrieval.py
+.\venv\Scripts\python.exe scripts\diagnostics\smoke_api.py
+.\venv\Scripts\python.exe scripts\diagnostics\smoke_chat_history_api.py
+.\venv\Scripts\python.exe scripts\diagnostics\inspect_qdrant_v2_payload.py --collection acne_knowledge
+.\venv\Scripts\python.exe scripts\diagnostics\analyze_qdrant_v2_metadata_distribution.py --collection acne_knowledge
+```
+
+## Scope An Toàn
+
+Hệ thống phù hợp cho:
+
+- hỏi đáp về mụn trứng cá
+- chăm sóc da mụn
+- hoạt chất trị mụn và lưu ý an toàn
+- dấu hiệu nên gặp bác sĩ da liễu
+- tra cứu thông tin từ tài liệu đã ingest
+
+Hệ thống không phù hợp cho:
+
+- kê đơn hoặc chọn liều thuốc
+- xử trí cấp cứu thay nhân viên y tế
+- chẩn đoán bệnh ngoài phạm vi mụn/da liễu
+- yêu cầu hack, prompt injection hoặc yêu cầu bỏ qua guardrail
+- thay thế khám trực tiếp
+
+Guardrail hiện xử lý:
+
+- out-of-domain
+- cyber/unsafe request
+- prompt injection và yêu cầu kê đơn
+- thuốc nguy cơ cao như isotretinoin, retinoid, kháng sinh
+- thai kỳ/cho con bú
+- dị ứng/phản vệ
+- sốt cao, đỏ lan nhanh, đau quanh mắt, nhìn mờ
+
+## Lưu Ý Trước Khi Push GitHub
+
+- Không commit `.env`.
+- Không commit `data/`, `sample_data/`, PDF, log, cache, `node_modules/` hoặc build output.
+- Kiểm tra `.gitignore` trước khi push.
+- Docker Compose chỉ chạy backing services; backend/frontend chạy riêng khi development.

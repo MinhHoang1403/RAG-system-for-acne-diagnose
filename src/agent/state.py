@@ -1,0 +1,69 @@
+"""
+src/agent/state.py – LangGraph Agent State
+==========================================
+Defines the `ClinicalState` representing the execution state of the
+Acne Advisor AI agent across graph nodes.
+"""
+
+from typing import Any, TypedDict
+
+
+class ClinicalState(TypedDict):
+    """The state payload passed between nodes in the LangGraph agent."""
+
+    # Input
+    user_question: str
+    conversation_history: list[dict[str, str]]
+    
+    # Processed Input
+    standalone_question: str | None
+    use_history_context: bool | None
+    normalized_question: str
+    patient_profile: dict[str, Any]
+    symptoms: list[str]
+    
+    # Guardrails
+    is_in_domain: bool | None
+    guardrail: str | None
+    ignored_out_of_domain_part: bool | None
+    domain_reason: str | None
+    refusal_message: str | None
+    
+    # Retrieval
+    vector_contexts: list[dict[str, Any]]
+    graph_facts: list[dict[str, Any]]
+    sources: list[str]
+    
+    # Reasoning & Generation
+    safety_flags: list[str]
+    draft_answer: str
+    final_answer: str
+    
+    # Error handling
+    errors: list[str]
+    llm_fallback: bool | None
+    fallback_reason: str | None
+    
+    # Cache
+    cache_enabled: bool | None
+    cache_checked: bool | None
+    cache_hit: bool | None
+    cache_key: str | None
+    cache_similarity: float | None
+    cache_reason: str | None
+    cached_answer: str | None
+    cached_sources: list[str] | None
+    cache_metadata: dict[str, Any] | None
+    
+    # Multi-Model Support
+    llm_provider: str | None
+    llm_model: str | None
+    allow_model_fallback: bool
+    actual_provider: str | None
+    actual_model: str | None
+    llm_fallback_used: bool
+    fallback_provider: str | None
+    fallback_model: str | None
+    
+    # Cache bypass (for test scripts)
+    bypass_cache: bool

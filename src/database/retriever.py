@@ -1,0 +1,455 @@
+"""
+src/database/retriever.py – Hybrid Retriever
+=============================================
+Combines Qdrant semantic search (dense + sparse BM25) with Neo4j
+knowledge graph context for comprehensive retrieval.
+
+Pipeline
+--------
+  User Query
+    ├─→ [1] Qdrant Dense Search   (semantic similarity)
+    ├─→ [2] Qdrant Sparse BM25    (lexical keyword match)
+    ├─→ [3] RRF Fusion            (merge & re-rank)
+    ├─→ [3.5] Metadata Boost      (Phase 1.5 query-adaptive boost)
+    └─→ [4] Neo4j KG Enrichment   (graph_nodes → relationships)
+
+  Output: RetrievalResult(vector_contexts, graph_facts, sources)
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from src.database.graph_store import Neo4jGraphStore
+from src.database.vector_store import QdrantVectorStore, embed_query
+
+# Phase 1.5 — Dermatology-aware query boost
+from src.ingestion.domain_metadata import extract_dermatology_metadata
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.5 — Query-Adaptive Metadata Boost
+# ---------------------------------------------------------------------------
+
+# Per-field boost weights
+_FIELD_BOOST_WEIGHTS: dict[str, float] = {
+    "ingredient": 0.15,
+    "concern": 0.10,
+    "content_type": 0.10,
+    "domain_topic": 0.08,
+    "skin_type": 0.08,
+    "safety_context": 0.10,
+    "body_area": 0.05,
+}
+
+# Maximum total boost to prevent over-ranking
+_MAX_METADATA_BOOST: float = 0.30
+
+# Boosted metadata field names expected in Qdrant payload
+_BOOST_FIELDS: list[str] = list(_FIELD_BOOST_WEIGHTS.keys())
+
+_REFERENCE_SECTION_MARKERS = (
+    "references",
+    "reference",
+    "bibliography",
+    "tài liệu tham khảo",
+    "tham khảo",
+)
+
+
+def _is_reference_context(result: dict[str, Any]) -> bool:
+    header = str(
+        result.get("header")
+        or result.get("parent_header_path")
+        or result.get("section")
+        or ""
+    ).lower()
+    content_type = result.get("content_type", [])
+    if isinstance(content_type, str):
+        content_type = [content_type]
+    content_type_text = " ".join(str(item).lower() for item in content_type)
+    return any(marker in header or marker in content_type_text for marker in _REFERENCE_SECTION_MARKERS)
+
+
+def prioritize_main_contexts(results: list[dict[str, Any]], top_k: int) -> list[dict[str, Any]]:
+    """Prefer guideline/body contexts over references for answer generation."""
+    main_contexts: list[dict[str, Any]] = []
+    reference_contexts: list[dict[str, Any]] = []
+
+    for result in results:
+        entry = dict(result)
+        if _is_reference_context(entry):
+            entry["context_role"] = "reference"
+            entry["score"] = round(float(entry.get("score", 0.0)) - 0.05, 6)
+            reference_contexts.append(entry)
+        else:
+            entry["context_role"] = "main"
+            main_contexts.append(entry)
+
+    selected = main_contexts[:top_k]
+    if len(selected) < top_k:
+        selected.extend(reference_contexts[: top_k - len(selected)])
+    return selected
+
+
+def extract_query_dermatology_metadata(query: str) -> dict[str, Any]:
+    """Extract dermatology metadata from a user query string.
+
+    Reuses the same rule-based extractor used during ingestion so
+    that query-side and document-side taxonomies are consistent.
+    """
+    return extract_dermatology_metadata(text=query, header_path="")
+
+
+def apply_metadata_boost(
+    results: list[dict[str, Any]],
+    query_metadata: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Apply soft metadata boost to retrieval results.
+
+    For each result, check if its payload fields overlap with the
+    query metadata.  Each matching field adds a weight-based bonus
+    to the score, capped at ``_MAX_METADATA_BOOST``.
+
+    The function is **backward-compatible**:
+    - If a result has no payload or no dermatology fields, it passes
+      through with ``metadata_boost_applied = False``.
+    - If ``score`` is None, it defaults to 0.0.
+    - Original score is always preserved as ``original_score``.
+
+    Parameters
+    ----------
+    results : list[dict]
+        Search results (each dict has at minimum ``"score"`` and
+        optional dermatology payload fields).
+    query_metadata : dict
+        Output of :func:`extract_query_dermatology_metadata`.
+
+    Returns
+    -------
+    list[dict]
+        Same results list, sorted descending by ``boosted_score``.
+    """
+    boosted: list[dict[str, Any]] = []
+
+    for result in results:
+        original_score = result.get("score")
+        if original_score is None:
+            original_score = 0.0
+        original_score = float(original_score)
+
+        total_boost = 0.0
+        matched_fields: list[str] = []
+
+        for field_name in _BOOST_FIELDS:
+            query_values = query_metadata.get(field_name, [])
+            if not query_values:
+                continue
+
+            doc_values = result.get(field_name, [])
+            if not isinstance(doc_values, list):
+                continue
+            if not doc_values:
+                continue
+
+            # Check for any overlap between query and document values
+            if set(query_values) & set(doc_values):
+                total_boost += _FIELD_BOOST_WEIGHTS[field_name]
+                matched_fields.append(field_name)
+
+        # Cap total boost
+        total_boost = min(total_boost, _MAX_METADATA_BOOST)
+
+        boosted_score = original_score + total_boost
+        boost_applied = total_boost > 0
+
+        # Attach boost debug info
+        entry = dict(result)
+        entry["original_score"] = round(original_score, 6)
+        entry["metadata_boost"] = round(total_boost, 6)
+        entry["boosted_score"] = round(boosted_score, 6)
+        entry["score"] = round(boosted_score, 6)
+        entry["metadata_boost_applied"] = boost_applied
+        entry["matched_metadata_fields"] = matched_fields
+
+        boosted.append(entry)
+
+    # Re-sort by boosted score descending
+    boosted.sort(key=lambda x: x["boosted_score"], reverse=True)
+
+    return boosted
+
+
+# ---------------------------------------------------------------------------
+# Result data class
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RetrievalResult:
+    """Structured output from the hybrid retrieval pipeline."""
+
+    vector_contexts: list[dict[str, Any]]
+    """Ranked chunks from Qdrant (text, score, metadata)."""
+
+    graph_facts: list[dict[str, Any]]
+    """Related entities and relationships from Neo4j."""
+
+    sources: list[str]
+    """Unique source file names referenced by retrieved chunks."""
+
+    query: str
+    """Original user query."""
+
+    metadata: dict[str, Any] = field(default_factory=dict)
+    """Timing and scoring breakdown for observability."""
+
+
+# ---------------------------------------------------------------------------
+# Hybrid Retriever
+# ---------------------------------------------------------------------------
+
+class HybridRetriever:
+    """Hybrid retrieval combining dense semantic search, sparse BM25 lexical
+    search, RRF fusion, and Neo4j knowledge graph enrichment.
+
+    Usage
+    -----
+    retriever = HybridRetriever()
+    result = await retriever.retrieve("isotretinoin side effects", top_k=5)
+    print(result.vector_contexts)
+    print(result.graph_facts)
+    await retriever.close()
+    """
+
+    def __init__(self) -> None:
+        self._vector_store = QdrantVectorStore()
+        self._graph_store = Neo4jGraphStore()
+
+    async def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        dense_weight: float = 1.0,
+        sparse_weight: float = 1.0,
+        rrf_k: int = 60,
+    ) -> RetrievalResult:
+        """Run the full hybrid retrieval pipeline.
+
+        Parameters
+        ----------
+        query : str
+            User question or search query.
+        top_k : int
+            Number of final chunks to return after fusion.
+        dense_weight : float
+            Weight for dense search in RRF fusion.
+        sparse_weight : float
+            Weight for sparse BM25 search in RRF fusion.
+        rrf_k : int
+            RRF constant (default 60, higher = more conservative fusion).
+        """
+        t_start = time.time()
+
+        # ── Step 1: Embed query ──────────────────────────────────────
+        t_embed_start = time.time()
+        query_vector = await embed_query(query)
+        t_embed = time.time() - t_embed_start
+        logger.info("Embedded query in %.2fs (dim=%d)", t_embed, len(query_vector))
+
+        # ── Step 2: Dense search ─────────────────────────────────────
+        fetch_k = max(top_k * 3, 15)  # Fetch more candidates for fusion
+
+        t_dense_start = time.time()
+        dense_results = await self._vector_store.search(
+            query_vector=query_vector,
+            top_k=fetch_k,
+        )
+        t_dense = time.time() - t_dense_start
+        logger.info("Dense search: %d results in %.2fs", len(dense_results), t_dense)
+
+        # ── Step 3: Sparse BM25 search ───────────────────────────────
+        t_sparse_start = time.time()
+        sparse_results = await self._vector_store.search_sparse(
+            text=query,
+            top_k=fetch_k,
+        )
+        t_sparse = time.time() - t_sparse_start
+        logger.info("Sparse search: %d results in %.2fs", len(sparse_results), t_sparse)
+
+        # ── Step 4: RRF Fusion ───────────────────────────────────────
+        fused = self._rrf_fusion(
+            dense_results=dense_results,
+            sparse_results=sparse_results,
+            dense_weight=dense_weight,
+            sparse_weight=sparse_weight,
+            k=rrf_k,
+        )
+
+        logger.info(
+            "RRF fusion: %d dense + %d sparse → %d fused",
+            len(dense_results),
+            len(sparse_results),
+            len(fused),
+        )
+
+        # ── Step 4.5: Query-Adaptive Metadata Boost (Phase 1.5) ──────
+        t_boost_start = time.time()
+        query_metadata = extract_query_dermatology_metadata(query)
+        boosted = apply_metadata_boost(fused, query_metadata)
+        t_boost = time.time() - t_boost_start
+
+        boost_count = sum(1 for r in boosted if r.get("metadata_boost_applied"))
+        logger.info(
+            "Metadata boost: %d/%d results boosted in %.4fs",
+            boost_count,
+            len(boosted),
+            t_boost,
+        )
+
+        top_chunks = prioritize_main_contexts(boosted, top_k)
+
+        # ── Step 5: Extract graph_nodes from Qdrant payloads ────────
+        entity_names: set[str] = set()
+        for chunk in top_chunks:
+            graph_nodes = chunk.get("graph_nodes", [])
+            if isinstance(graph_nodes, list):
+                entity_names.update(
+                    n for n in graph_nodes if isinstance(n, str) and n.strip()
+                )
+
+        # ── Step 6: Neo4j knowledge graph context ────────────────────
+        t_neo4j_start = time.time()
+
+        if entity_names:
+            graph_facts = await self._graph_store.get_entity_context(
+                list(entity_names),
+            )
+        else:
+            # Fallback: keyword search from query tokens
+            logger.info(
+                "No graph_nodes in payloads, falling back to keyword search."
+            )
+            keywords = query.lower().split()
+            graph_facts = await self._graph_store.search_by_keywords(keywords)
+
+        t_neo4j = time.time() - t_neo4j_start
+        logger.info(
+            "Neo4j context: %d entity names → %d facts in %.2fs",
+            len(entity_names),
+            len(graph_facts),
+            t_neo4j,
+        )
+
+        # ── Step 7: Build sources list ───────────────────────────────
+        sources = list(dict.fromkeys(
+            c.get("source_file", "")
+            for c in top_chunks
+            if c.get("source_file")
+        ))[:2]
+
+        t_total = time.time() - t_start
+
+        return RetrievalResult(
+            vector_contexts=top_chunks,
+            graph_facts=graph_facts,
+            sources=sources,
+            query=query,
+            metadata={
+                "total_time_s": round(t_total, 3),
+                "embed_time_s": round(t_embed, 3),
+                "dense_time_s": round(t_dense, 3),
+                "sparse_time_s": round(t_sparse, 3),
+                "boost_time_s": round(t_boost, 3),
+                "neo4j_time_s": round(t_neo4j, 3),
+                "dense_count": len(dense_results),
+                "sparse_count": len(sparse_results),
+                "fused_count": len(fused),
+                "boosted_count": boost_count,
+                "top_k": top_k,
+                "entity_names_count": len(entity_names),
+                "graph_facts_count": len(graph_facts),
+                "query_metadata": query_metadata,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # RRF fusion
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _rrf_fusion(
+        dense_results: list[dict],
+        sparse_results: list[dict],
+        dense_weight: float = 1.0,
+        sparse_weight: float = 1.0,
+        k: int = 60,
+    ) -> list[dict]:
+        """Reciprocal Rank Fusion to merge dense and sparse search results.
+
+        Formula: ``score(doc) = Σ weight / (k + rank)``
+        where rank is 1-indexed.
+
+        Uses Qdrant point ID as the document key for deduplication.
+        """
+        doc_scores: dict[str, float] = {}
+        doc_data: dict[str, dict] = {}
+
+        # Score dense results
+        for rank, doc in enumerate(dense_results, start=1):
+            doc_id = str(doc.get("id", ""))
+            if not doc_id:
+                continue
+            rrf_score = dense_weight / (k + rank)
+            doc_scores[doc_id] = doc_scores.get(doc_id, 0.0) + rrf_score
+            if doc_id not in doc_data:
+                doc_data[doc_id] = doc.copy()
+            doc_data[doc_id]["dense_rank"] = rank
+            doc_data[doc_id]["dense_score"] = doc.get("score", 0.0)
+
+        # Score sparse results
+        for rank, doc in enumerate(sparse_results, start=1):
+            doc_id = str(doc.get("id", ""))
+            if not doc_id:
+                continue
+            rrf_score = sparse_weight / (k + rank)
+            doc_scores[doc_id] = doc_scores.get(doc_id, 0.0) + rrf_score
+            if doc_id not in doc_data:
+                doc_data[doc_id] = doc.copy()
+            doc_data[doc_id]["sparse_rank"] = rank
+            doc_data[doc_id]["sparse_score"] = doc.get("score", 0.0)
+
+        # Sort by fused RRF score descending
+        ranked_ids = sorted(
+            doc_scores,
+            key=lambda did: doc_scores[did],
+            reverse=True,
+        )
+
+        result: list[dict] = []
+        for doc_id in ranked_ids:
+            doc = doc_data[doc_id]
+            doc["rrf_score"] = round(doc_scores[doc_id], 6)
+            doc["score"] = doc["rrf_score"]  # Override score with RRF
+            result.append(doc)
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Cleanup
+    # ------------------------------------------------------------------
+
+    async def close(self) -> None:
+        """Close all backend connections."""
+        try:
+            await self._vector_store.close()
+        except Exception as exc:
+            logger.warning("Error closing vector store: %s", exc)
+        try:
+            await self._graph_store.close()
+        except Exception as exc:
+            logger.warning("Error closing graph store: %s", exc)
