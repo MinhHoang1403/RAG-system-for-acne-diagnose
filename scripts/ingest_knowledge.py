@@ -130,6 +130,7 @@ EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "models/gemini-embedding-001
 EMBEDDING_DIMENSIONS: int = int(os.getenv("EMBEDDING_DIMENSIONS", "3072"))
 
 QDRANT_URL: str = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY: str = os.getenv("QDRANT_API_KEY", "")
 QDRANT_COLLECTION_NAME: str = os.getenv("QDRANT_COLLECTION_NAME", "acne_knowledge")
 
 NEO4J_URI: str = os.getenv("NEO4J_URI", "bolt://localhost:7687")
@@ -144,6 +145,8 @@ DATA_DIR: Path = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data")))
 CACHE_DIR: Path = DATA_DIR / "cache"
 MARKDOWN_CACHE_DIR: Path = CACHE_DIR / "markdown"
 GRAPH_CACHE_DIR: Path = CACHE_DIR / "graph"
+DEFAULT_MANIFEST_PATH: Path = DATA_DIR / "ingestion_manifest.json"
+INGESTION_MANIFEST_VERSION: int = 1
 
 CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "2000"))
 LLM_CONCURRENCY: int = int(os.getenv("LLM_CONCURRENCY", "2"))
@@ -155,6 +158,8 @@ GRAPH_PROMPT_SCHEMA_VERSION: str = os.getenv(
     "GRAPH_PROMPT_SCHEMA_VERSION",
     "clinical_graph_prompt_v2",
 )
+GRAPH_ERROR_TOLERANCE_RATIO: float = float(os.getenv("GRAPH_ERROR_TOLERANCE_RATIO", "0.02"))
+GRAPH_ERROR_TOLERANCE_MAX: int = int(os.getenv("GRAPH_ERROR_TOLERANCE_MAX", "3"))
 
 # Gemini embedding free-tier rate limit protection.
 # Gemini embedding quota can be counted per text inside a batch. With 16 texts/batch,
@@ -190,8 +195,20 @@ class SemanticChunk:
         return hashlib.sha256(self.text.encode("utf-8")).hexdigest()[:16]
 
     @property
+    def document_identity(self) -> str:
+        document_id = self.metadata.get("document_id")
+        if document_id:
+            return str(document_id)
+
+        source_path = self.metadata.get("source_path")
+        if source_path:
+            return document_id_from_source_path(str(source_path))
+
+        return self.source_file
+
+    @property
     def chunk_id(self) -> str:
-        key = f"{self.source_file}::{self.chunk_index}::{self.content_hash}"
+        key = f"{self.document_identity}::{self.chunk_index}::{self.content_hash}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
 
     @property
@@ -289,6 +306,519 @@ def discover_source_documents(source_dir: Path) -> list[Path]:
     return sorted(files)
 
 
+# =============================================================================
+# Incremental ingestion manifest
+# =============================================================================
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def compute_file_hash(path: Path) -> str:
+    """Return a SHA256 hash of the real file content."""
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(block)
+    return hasher.hexdigest()
+
+
+def _source_path_key(path: Path) -> str:
+    try:
+        return str(path.resolve())
+    except OSError:
+        return str(path)
+
+
+def document_id_from_source_path(source_path: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"acne-advisor-ai:{source_path}"))
+
+
+def _file_modified_time_iso(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+
+
+def _manifest_base() -> dict[str, Any]:
+    return {
+        "manifest_version": INGESTION_MANIFEST_VERSION,
+        "updated_at": None,
+        "documents": {},
+    }
+
+
+def load_ingestion_manifest(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return _manifest_base()
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid ingestion manifest JSON at {path}: {exc}") from exc
+    except OSError as exc:
+        raise OSError(f"Unable to read ingestion manifest at {path}: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Ingestion manifest must be a JSON object: {path}")
+
+    data.setdefault("manifest_version", INGESTION_MANIFEST_VERSION)
+    data.setdefault("updated_at", None)
+    documents = data.setdefault("documents", {})
+    if not isinstance(documents, dict):
+        raise ValueError(f"Ingestion manifest 'documents' must be an object: {path}")
+
+    return data
+
+
+def save_ingestion_manifest(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data["manifest_version"] = INGESTION_MANIFEST_VERSION
+    data["updated_at"] = utc_now_iso()
+
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                logger.warning("[MANIFEST] Failed to remove temp manifest %s", tmp_path.name)
+
+
+def _manifest_documents(manifest: dict[str, Any]) -> dict[str, Any]:
+    documents = manifest.setdefault("documents", {})
+    if not isinstance(documents, dict):
+        raise ValueError("Ingestion manifest 'documents' must be an object")
+    return documents
+
+
+def _find_manifest_entry(
+    manifest: dict[str, Any],
+    source_path: str,
+) -> tuple[str | None, dict[str, Any] | None]:
+    documents = _manifest_documents(manifest)
+    direct = documents.get(source_path)
+    if isinstance(direct, dict):
+        return source_path, direct
+
+    for key, entry in documents.items():
+        if isinstance(entry, dict) and entry.get("source_path") == source_path:
+            return str(key), entry
+
+    return None, None
+
+
+def _file_manifest_info(path: Path) -> dict[str, Any]:
+    source_path = _source_path_key(path)
+    stat = path.stat()
+    return {
+        "path": path,
+        "source_path": source_path,
+        "document_id": document_id_from_source_path(source_path),
+        "content_hash": compute_file_hash(path),
+        "file_size": stat.st_size,
+        "modified_time": _file_modified_time_iso(path),
+    }
+
+
+def get_incremental_file_plan(
+    files: list[Path],
+    manifest: dict[str, Any],
+    force_reingest: bool = False,
+) -> dict[str, Any]:
+    scanned: list[dict[str, Any]] = []
+    to_ingest: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    summary = {
+        "scanned": 0,
+        "new": 0,
+        "changed": 0,
+        "retry": 0,
+        "force": 0,
+        "skipped": 0,
+        "to_ingest": 0,
+    }
+
+    for path in files:
+        info = _file_manifest_info(path)
+        manifest_key, previous = _find_manifest_entry(manifest, info["source_path"])
+        previous_status = str(previous.get("status", "")) if previous else None
+        previous_hash = str(previous.get("content_hash", "")) if previous else None
+
+        info["manifest_key"] = manifest_key
+        info["previous_status"] = previous_status
+        info["previous_content_hash"] = previous_hash
+
+        if force_reingest:
+            reason = "force"
+        elif previous is None:
+            reason = "new"
+        elif previous_status in {"failed", "partial"}:
+            if previous_hash != info["content_hash"]:
+                reason = "changed"
+            else:
+                reason = "retry"
+        elif previous_hash != info["content_hash"]:
+            reason = "changed"
+        elif previous_status in {"completed", "completed_with_warnings"}:
+            reason = "skip"
+        else:
+            reason = "retry"
+
+        info["reason"] = reason
+        scanned.append(info)
+
+        if reason == "skip":
+            skipped.append(info)
+            summary["skipped"] += 1
+        else:
+            to_ingest.append(info)
+            summary["to_ingest"] += 1
+            summary[reason] += 1
+
+    summary["scanned"] = len(scanned)
+    return {
+        "scanned": scanned,
+        "to_ingest": to_ingest,
+        "skipped": skipped,
+        "summary": summary,
+    }
+
+
+def log_incremental_file_plan(plan: dict[str, Any]) -> None:
+    summary = plan["summary"]
+    logger.info("[INCREMENTAL] Files scanned          : %d", summary["scanned"])
+    logger.info("[INCREMENTAL] New files              : %d", summary["new"])
+    logger.info("[INCREMENTAL] Changed files          : %d", summary["changed"])
+    logger.info("[INCREMENTAL] Failed/partial retries : %d", summary["retry"])
+    logger.info("[INCREMENTAL] Force reingest files   : %d", summary["force"])
+    logger.info("[INCREMENTAL] Skipped unchanged      : %d", summary["skipped"])
+    logger.info("[INCREMENTAL] Files to ingest        : %d", summary["to_ingest"])
+
+    for item in plan["skipped"]:
+        logger.info("[INCREMENTAL] Skip unchanged: %s", item["source_path"])
+
+    for item in plan["to_ingest"]:
+        logger.info(
+            "[INCREMENTAL] Queue %s (%s)",
+            item["source_path"],
+            item["reason"],
+        )
+
+
+def _short_error_message(error: Exception | str, max_length: int = 500) -> str:
+    message = str(error).replace("\r", " ").replace("\n", " ").strip()
+    if len(message) <= max_length:
+        return message
+    return message[: max_length - 3] + "..."
+
+
+def update_manifest_before_ingest(
+    manifest: dict[str, Any],
+    file_info: dict[str, Any],
+    ingestion_run_id: str,
+) -> None:
+    documents = _manifest_documents(manifest)
+    source_path = str(file_info["source_path"])
+    previous = documents.get(source_path)
+    previous_chunk_count = 0
+    previous_qdrant_ids: list[str] = []
+    if isinstance(previous, dict):
+        previous_chunk_count = int(previous.get("chunk_count", 0) or 0)
+        raw_ids = previous.get("qdrant_point_ids", [])
+        if isinstance(raw_ids, list):
+            previous_qdrant_ids = [str(point_id) for point_id in raw_ids]
+
+    documents[source_path] = {
+        **{
+            key: file_info[key]
+            for key in (
+                "source_path",
+                "document_id",
+                "content_hash",
+                "file_size",
+                "modified_time",
+            )
+        },
+        "status": "partial",
+        "chunk_count": previous_chunk_count,
+        "qdrant_point_ids": previous_qdrant_ids,
+        "last_ingested_at": None,
+        "ingestion_run_id": ingestion_run_id,
+        "error_message": "ingestion started but has not completed",
+    }
+
+
+def update_manifest_after_success(
+    manifest: dict[str, Any],
+    source_path: str,
+    document_id: str,
+    content_hash: str,
+    file_size: int,
+    modified_time: str,
+    chunk_count: int,
+    qdrant_point_ids: list[str] | None,
+    ingestion_run_id: str,
+    last_ingested_at: str | None = None,
+    status: str = "completed",
+    error_message: str | None = None,
+    graph_error_count: int | None = None,
+    graph_error_tolerance: float | None = None,
+    warning: str | None = None,
+) -> None:
+    documents = _manifest_documents(manifest)
+    entry: dict[str, Any] = {
+        "source_path": source_path,
+        "document_id": document_id,
+        "content_hash": content_hash,
+        "file_size": file_size,
+        "modified_time": modified_time,
+        "status": status,
+        "chunk_count": chunk_count,
+        "qdrant_point_ids": qdrant_point_ids or [],
+        "last_ingested_at": last_ingested_at or utc_now_iso(),
+        "ingestion_run_id": ingestion_run_id,
+    }
+    if error_message:
+        entry["error_message"] = _short_error_message(error_message)
+    if graph_error_count is not None:
+        entry["graph_error_count"] = graph_error_count
+    if graph_error_tolerance is not None:
+        entry["graph_error_tolerance"] = graph_error_tolerance
+    if warning:
+        entry["warning"] = warning
+    documents[source_path] = entry
+
+
+def update_manifest_after_failure(
+    manifest: dict[str, Any],
+    file_info: dict[str, Any],
+    ingestion_run_id: str,
+    error: Exception | str,
+    status: str = "failed",
+    chunk_count: int | None = None,
+    qdrant_point_ids: list[str] | None = None,
+    last_ingested_at: str | None = None,
+    graph_error_count: int | None = None,
+    graph_error_tolerance: float | None = None,
+    warning: str | None = None,
+) -> None:
+    documents = _manifest_documents(manifest)
+    source_path = str(file_info["source_path"])
+    previous = documents.get(source_path)
+    previous_qdrant_ids = []
+    if isinstance(previous, dict):
+        raw_ids = previous.get("qdrant_point_ids", [])
+        if isinstance(raw_ids, list):
+            previous_qdrant_ids = [str(point_id) for point_id in raw_ids]
+
+    manifest_chunk_count = (
+        chunk_count
+        if chunk_count is not None
+        else int(previous.get("chunk_count", 0) or 0) if isinstance(previous, dict) else 0
+    )
+    manifest_qdrant_point_ids = (
+        qdrant_point_ids
+        if qdrant_point_ids is not None
+        else previous_qdrant_ids
+    )
+
+    entry: dict[str, Any] = {
+        "source_path": source_path,
+        "document_id": str(file_info["document_id"]),
+        "content_hash": str(file_info["content_hash"]),
+        "file_size": int(file_info["file_size"]),
+        "modified_time": str(file_info["modified_time"]),
+        "status": status,
+        "chunk_count": manifest_chunk_count,
+        "qdrant_point_ids": manifest_qdrant_point_ids,
+        "last_ingested_at": last_ingested_at or utc_now_iso(),
+        "ingestion_run_id": ingestion_run_id,
+        "error_message": _short_error_message(error),
+    }
+    if graph_error_count is not None:
+        entry["graph_error_count"] = graph_error_count
+    if graph_error_tolerance is not None:
+        entry["graph_error_tolerance"] = graph_error_tolerance
+    if warning:
+        entry["warning"] = warning
+    documents[source_path] = entry
+
+
+def enrich_chunks_with_ingestion_metadata(
+    chunks: list[SemanticChunk],
+    file_info: dict[str, Any],
+    ingestion_run_id: str,
+    ingested_at: str,
+) -> None:
+    for chunk in chunks:
+        chunk.metadata.update(
+            {
+                "document_id": str(file_info["document_id"]),
+                "source_path": str(file_info["source_path"]),
+                "content_hash": str(file_info["content_hash"]),
+                "file_size": int(file_info["file_size"]),
+                "modified_time": str(file_info["modified_time"]),
+                "ingestion_run_id": ingestion_run_id,
+                "ingested_at": ingested_at,
+            }
+        )
+        chunk.metadata.update(
+            {
+                "chunk_index": chunk.chunk_index,
+                "chunk_id": chunk.chunk_id,
+                "chunk_hash": chunk.content_hash,
+            }
+        )
+
+
+def qdrant_point_ids_for_chunks(chunks: list[SemanticChunk]) -> list[str]:
+    return [
+        chunk.qdrant_point_id
+        for chunk in chunks
+        if not chunk.metadata.get("is_noisy", False)
+    ]
+
+
+def graph_error_tolerance_for_chunks(total_chunks: int) -> float:
+    return max(
+        float(GRAPH_ERROR_TOLERANCE_MAX),
+        float(total_chunks) * GRAPH_ERROR_TOLERANCE_RATIO,
+    )
+
+
+def graph_warning_message(graph_errors: int, tolerance: float) -> str:
+    return (
+        f"{graph_errors} chunk(s) had graph extraction errors; "
+        f"tolerance={tolerance:g}. Some chunks do not have graph extraction."
+    )
+
+
+def finalize_manifest_for_documents(
+    manifest: dict[str, Any],
+    doc_chunks: list[tuple[dict[str, Any], list[SemanticChunk]]],
+    payloads: list[GraphPayload],
+    ingestion_run_id: str,
+    ingested_at: str,
+    skip_neo4j: bool,
+    skip_qdrant: bool,
+    qdrant_ids_available: bool,
+    limit_chunks_truncated: bool,
+    global_error: str | None = None,
+) -> None:
+    payloads_by_chunk_id = {payload.chunk_id: payload for payload in payloads}
+
+    for file_info, chunks in doc_chunks:
+        reasons: list[str] = []
+        if not chunks:
+            reasons.append("no chunks processed")
+        if limit_chunks_truncated:
+            reasons.append("--limit-chunks used")
+        if skip_neo4j:
+            reasons.append("skipped Neo4j")
+        if skip_qdrant:
+            reasons.append("skipped Qdrant")
+        if global_error:
+            reasons.append(global_error)
+
+        graph_errors = sum(
+            1
+            for chunk in chunks
+            if payloads_by_chunk_id.get(chunk.chunk_id, GraphPayload(chunk_id=chunk.chunk_id)).extraction_error
+        )
+        graph_tolerance = graph_error_tolerance_for_chunks(len(chunks))
+        graph_warning = None
+        graph_errors_within_tolerance = (
+            graph_errors > 0
+            and graph_errors <= graph_tolerance
+            and not limit_chunks_truncated
+            and not skip_neo4j
+            and not skip_qdrant
+            and qdrant_ids_available
+            and not global_error
+            and bool(chunks)
+        )
+        if graph_errors > 0 and not graph_errors_within_tolerance:
+            reasons.append(
+                f"graph extraction failed for {graph_errors} chunk(s); "
+                f"tolerance={graph_tolerance:g}"
+            )
+        elif graph_errors_within_tolerance:
+            graph_warning = graph_warning_message(graph_errors, graph_tolerance)
+
+        qdrant_point_ids = (
+            qdrant_point_ids_for_chunks(chunks)
+            if qdrant_ids_available
+            else []
+        )
+
+        if reasons:
+            update_manifest_after_failure(
+                manifest=manifest,
+                file_info=file_info,
+                ingestion_run_id=ingestion_run_id,
+                error="; ".join(reasons),
+                status="partial",
+                chunk_count=len(chunks),
+                qdrant_point_ids=qdrant_point_ids,
+                last_ingested_at=ingested_at,
+                graph_error_count=graph_errors,
+                graph_error_tolerance=graph_tolerance,
+            )
+            continue
+
+        update_manifest_after_success(
+            manifest=manifest,
+            source_path=str(file_info["source_path"]),
+            document_id=str(file_info["document_id"]),
+            content_hash=str(file_info["content_hash"]),
+            file_size=int(file_info["file_size"]),
+            modified_time=str(file_info["modified_time"]),
+            chunk_count=len(chunks),
+            qdrant_point_ids=qdrant_point_ids,
+            ingestion_run_id=ingestion_run_id,
+            last_ingested_at=ingested_at,
+            status="completed_with_warnings" if graph_warning else "completed",
+            error_message=graph_warning,
+            graph_error_count=graph_errors,
+            graph_error_tolerance=graph_tolerance,
+            warning=graph_warning,
+        )
+
+
+def warn_changed_document_cleanup(
+    file_info: dict[str, Any],
+    skip_neo4j: bool,
+    skip_qdrant: bool,
+    dry_run: bool,
+) -> None:
+    if file_info.get("reason") != "changed" or dry_run:
+        return
+
+    if not skip_qdrant:
+        logger.warning(
+            "[INCREMENTAL] Changed file detected: %s. New vectors will be "
+            "upserted into Qdrant, but old Qdrant points may remain stale. "
+            "TODO: cleanup old points by document_id/source_path after "
+            "verifying Qdrant payload delete support for this client and collection.",
+            file_info["source_path"],
+        )
+
+    if not skip_neo4j:
+        logger.warning(
+            "[INCREMENTAL] Changed file detected: %s. New graph facts will be "
+            "MERGEd into Neo4j, but old Neo4j facts may remain stale. TODO: "
+            "add document ownership metadata before cleanup by document_id; "
+            "current nodes/edges are global clinical entities keyed by name.",
+            file_info["source_path"],
+        )
+
+
 def clear_graph_cache_dir() -> int:
     ensure_cache_dirs()
     deleted = 0
@@ -332,7 +862,7 @@ def graph_cache_key(chunk: SemanticChunk) -> str:
             GRAPH_CACHE_VERSION,
             GRAPH_PROMPT_SCHEMA_VERSION,
             OLLAMA_MODEL,
-            chunk.source_file,
+            chunk.document_identity,
             str(chunk.chunk_index),
             chunk.content_hash,
         ]
@@ -491,6 +1021,9 @@ def _validate_graph_payload_data(data: Any, chunk_id: str, source: str) -> bool:
     if not isinstance(data, dict):
         logger.warning("[CACHE] %s graph payload is not a JSON object for chunk %s", source, chunk_id)
         return False
+    if data.get("extraction_error") is True:
+        logger.warning("[CACHE] %s graph payload has extraction_error=True for chunk %s", source, chunk_id)
+        return False
 
     nodes = data.get("nodes")
     edges = data.get("edges")
@@ -500,9 +1033,6 @@ def _validate_graph_payload_data(data: Any, chunk_id: str, source: str) -> bool:
         return False
     if not isinstance(edges, list):
         logger.warning("[CACHE] %s graph payload edges is not a list for chunk %s", source, chunk_id)
-        return False
-    if not nodes and not edges:
-        logger.warning("[CACHE] %s graph payload is empty for chunk %s", source, chunk_id)
         return False
 
     for idx, node in enumerate(nodes):
@@ -559,6 +1089,7 @@ def save_graph_payload(payload: GraphPayload, chunk: SemanticChunk) -> bool:
         "chunk_index": chunk.chunk_index,
         "chunk_id": chunk.chunk_id,
         "chunk_hash": chunk.content_hash,
+        "extraction_error": False,
         "created_at": datetime.now(timezone.utc).isoformat(),
         **graph_payload_to_dict(payload),
     }
@@ -624,6 +1155,15 @@ def load_graph_payload(
         )
         return None
 
+    if data.get("extraction_error") is True:
+        _record_graph_cache_invalid(stats, "schema")
+        logger.warning(
+            "[CACHE] Graph cache %s has extraction_error=True for chunk %s",
+            path.name,
+            chunk.chunk_id,
+        )
+        return None
+
     mismatches = []
     if data.get("cache_version") != GRAPH_CACHE_VERSION:
         mismatches.append(
@@ -650,9 +1190,9 @@ def load_graph_payload(
         return None
 
     payload = graph_payload_from_dict(data, from_cache=True)
-    if payload.extraction_error or (not payload.nodes and not payload.edges):
+    if payload.extraction_error:
         _record_graph_cache_invalid(stats, "schema")
-        logger.warning("[CACHE] Graph cache normalized to empty payload %s", path.name)
+        logger.warning("[CACHE] Graph cache normalized to failed payload %s", path.name)
         return None
 
     return payload
@@ -662,12 +1202,79 @@ def load_graph_payload(
 # STAGE 1 – PDF Extraction with Markdown cache
 # =============================================================================
 
+def build_llamaparse_parser() -> Any:
+    try:
+        from llama_parse import LlamaParse  # type: ignore
+    except ImportError as exc:
+        raise SystemExit("Missing dependency. Run: pip install llama-parse") from exc
+
+    return LlamaParse(
+        api_key=LLAMA_CLOUD_API_KEY,
+        result_type="markdown",
+        parsing_instruction=LLAMAPARSE_INSTRUCTION,
+        verbose=False,
+    )
+
+
+async def stage1_extract_one_source(
+    source_path: Path,
+    parser: Any,
+    refresh_markdown: bool = False,
+    stats: IngestionStats | None = None,
+) -> tuple[str, str] | None:
+    cache_path = markdown_cache_path(source_path)
+
+    if not refresh_markdown:
+        cached_markdown = load_markdown_cache(cache_path, source_path.name, stats=stats)
+        if cached_markdown is not None:
+            return source_path.name, cached_markdown
+
+        legacy_cache_path = legacy_markdown_cache_path(source_path)
+        if legacy_cache_path != cache_path:
+            legacy_markdown = load_markdown_cache(
+                legacy_cache_path,
+                source_path.name,
+                stats=None,
+            )
+            if legacy_markdown is not None:
+                logger.info(
+                    "[STAGE 1] Migrating legacy Markdown cache for %s to content-hash key.",
+                    source_path.name,
+                )
+                save_text(cache_path, legacy_markdown)
+                if stats:
+                    stats.markdown_cache_hits += 1
+                return source_path.name, legacy_markdown
+
+    if stats:
+        stats.markdown_cache_misses += 1
+
+    try:
+        logger.info("[STAGE 1] Parsing with LlamaParse: %s", source_path.name)
+        documents = await parser.aload_data(str(source_path))
+        markdown = "\n\n".join(doc.text for doc in documents if getattr(doc, "text", None))
+        if not markdown.strip():
+            raise ValueError("LlamaParse returned empty Markdown")
+        save_text(cache_path, markdown)
+        logger.info(
+            "[STAGE 1] ✓ %s — %d chars extracted",
+            source_path.name,
+            len(markdown),
+        )
+        return source_path.name, markdown
+    except Exception as exc:
+        logger.error("[STAGE 1] ✗ Failed to parse %s: %s", source_path.name, exc)
+        if stats:
+            stats.parse_errors += 1
+        return None
+
+
 async def stage1_extract_pdfs(
     source_dir: Path,
     limit_files: int | None = None,
     refresh_markdown: bool = False,
     stats: IngestionStats | None = None,
-) -> list[tuple[str, str]]:
+) -> list[tuple[dict[str, Any], str, str]]:
     source_files = discover_source_documents(source_dir)
 
     if limit_files is not None and limit_files > 0:
@@ -679,67 +1286,24 @@ async def stage1_extract_pdfs(
 
     logger.info("[STAGE 1] Found %d PDF/DOCX file(s) in %s", len(source_files), source_dir)
 
-    try:
-        from llama_parse import LlamaParse  # type: ignore
-    except ImportError as exc:
-        raise SystemExit("Missing dependency. Run: pip install llama-parse") from exc
+    parser = build_llamaparse_parser()
 
-    parser = LlamaParse(
-        api_key=LLAMA_CLOUD_API_KEY,
-        result_type="markdown",
-        parsing_instruction=LLAMAPARSE_INSTRUCTION,
-        verbose=False,
-    )
-
-    async def parse_one(source_path: Path) -> tuple[str, str] | None:
-        cache_path = markdown_cache_path(source_path)
-
-        if not refresh_markdown:
-            cached_markdown = load_markdown_cache(cache_path, source_path.name, stats=stats)
-            if cached_markdown is not None:
-                return source_path.name, cached_markdown
-
-            legacy_cache_path = legacy_markdown_cache_path(source_path)
-            if legacy_cache_path != cache_path:
-                legacy_markdown = load_markdown_cache(
-                    legacy_cache_path,
-                    source_path.name,
-                    stats=None,
-                )
-                if legacy_markdown is not None:
-                    logger.info(
-                        "[STAGE 1] Migrating legacy Markdown cache for %s to content-hash key.",
-                        source_path.name,
-                    )
-                    save_text(cache_path, legacy_markdown)
-                    if stats:
-                        stats.markdown_cache_hits += 1
-                    return source_path.name, legacy_markdown
-
-        if stats:
-            stats.markdown_cache_misses += 1
-
-        try:
-            logger.info("[STAGE 1] Parsing with LlamaParse: %s", source_path.name)
-            documents = await parser.aload_data(str(source_path))
-            markdown = "\n\n".join(doc.text for doc in documents if getattr(doc, "text", None))
-            if not markdown.strip():
-                raise ValueError("LlamaParse returned empty Markdown")
-            save_text(cache_path, markdown)
-            logger.info(
-                "[STAGE 1] ✓ %s — %d chars extracted",
-                source_path.name,
-                len(markdown),
+    raw_results = await asyncio.gather(
+        *(
+            stage1_extract_one_source(
+                source_path=p,
+                parser=parser,
+                refresh_markdown=refresh_markdown,
+                stats=stats,
             )
-            return source_path.name, markdown
-        except Exception as exc:
-            logger.error("[STAGE 1] ✗ Failed to parse %s: %s", source_path.name, exc)
-            if stats:
-                stats.parse_errors += 1
-            return None
-
-    raw_results = await asyncio.gather(*(parse_one(p) for p in source_files))
-    results = [item for item in raw_results if item is not None]
+            for p in source_files
+        )
+    )
+    results = [
+        (_file_manifest_info(source_path), item[0], item[1])
+        for source_path, item in zip(source_files, raw_results)
+        if item is not None
+    ]
 
     logger.info(
         "[STAGE 1] Completed: %d/%d documents available",
@@ -1215,6 +1779,13 @@ def _http_get_json(url: str, timeout: float = 5.0) -> Any:
     return json.loads(body) if body else {}
 
 
+def qdrant_client_kwargs() -> dict[str, Any]:
+    kwargs: dict[str, Any] = {"url": QDRANT_URL}
+    if QDRANT_API_KEY:
+        kwargs["api_key"] = QDRANT_API_KEY
+    return kwargs
+
+
 def preflight_source_documents(source_dir: Path) -> bool:
     docs = discover_source_documents(source_dir)
     if not source_dir.exists():
@@ -1225,6 +1796,23 @@ def preflight_source_documents(source_dir: Path) -> bool:
         return False
     logger.info("[PREFLIGHT] Source documents found: %d", len(docs))
     return True
+
+
+def incremental_plan_has_no_work(args: argparse.Namespace) -> bool:
+    if not getattr(args, "incremental", False):
+        return False
+    if getattr(args, "force_reingest", False):
+        return False
+
+    source_files = discover_source_documents(args.source)
+    if args.limit_files is not None and args.limit_files > 0:
+        source_files = source_files[:args.limit_files]
+    if not source_files:
+        return False
+
+    manifest = load_ingestion_manifest(args.manifest_path)
+    plan = get_incremental_file_plan(source_files, manifest, force_reingest=False)
+    return not plan["to_ingest"]
 
 
 async def preflight_ollama() -> bool:
@@ -1263,7 +1851,7 @@ async def preflight_qdrant() -> bool:
     except ImportError as exc:
         raise SystemExit("Missing dependency. Run: pip install qdrant-client") from exc
 
-    client = AsyncQdrantClient(url=QDRANT_URL)
+    client = AsyncQdrantClient(**qdrant_client_kwargs())
     try:
         await client.get_collections()
         logger.info("[PREFLIGHT] Qdrant reachable at %s", QDRANT_URL)
@@ -1294,6 +1882,18 @@ async def run_preflight_checks(args: argparse.Namespace, graph_resume_enabled: b
     checks_ok = True
 
     checks_ok = preflight_source_documents(args.source) and checks_ok
+
+    if checks_ok:
+        try:
+            if incremental_plan_has_no_work(args):
+                logger.info(
+                    "[PREFLIGHT] Incremental manifest has no files to ingest; "
+                    "external service checks skipped."
+                )
+                return True
+        except Exception as exc:
+            logger.error("[PREFLIGHT] Failed to evaluate incremental manifest: %s", exc)
+            return False
 
     if not LLAMA_CLOUD_API_KEY:
         logger.error("[PREFLIGHT] LLAMA_CLOUD_API_KEY is not set.")
@@ -1707,6 +2307,8 @@ def compute_hashed_sparse_vectors(texts: list[str]) -> list[dict[str, list]]:
 async def stage4b_upsert_qdrant(
     chunks: list[SemanticChunk],
     payloads: list[GraphPayload],
+    ingestion_run_id: str | None = None,
+    ingested_at: str | None = None,
 ) -> int:
     logger.info(
         "[STAGE 4B] Upserting %d chunks into Qdrant '%s'",
@@ -1720,7 +2322,8 @@ async def stage4b_upsert_qdrant(
     except ImportError as exc:
         raise SystemExit("Missing dependency. Run: pip install qdrant-client") from exc
 
-    client = AsyncQdrantClient(url=QDRANT_URL)
+    client = AsyncQdrantClient(**qdrant_client_kwargs())
+    payload_ingested_at = ingested_at or utc_now_iso()
 
     try:
         await ensure_qdrant_collection(client)
@@ -1799,9 +2402,35 @@ async def stage4b_upsert_qdrant(
                         f"then recreate Qdrant collection."
                     )
 
+                source_path = str(chunk.metadata.get("source_path") or chunk.source_file)
+                document_id = str(
+                    chunk.metadata.get("document_id")
+                    or document_id_from_source_path(source_path)
+                )
+                document_content_hash = str(
+                    chunk.metadata.get("content_hash")
+                    or chunk.content_hash
+                )
+                payload_run_id = str(
+                    chunk.metadata.get("ingestion_run_id")
+                    or ingestion_run_id
+                    or ""
+                )
+                payload_time = str(
+                    chunk.metadata.get("ingested_at")
+                    or payload_ingested_at
+                )
+
                 payload = {
                     **chunk.metadata,
+                    "document_id": document_id,
+                    "source_path": source_path,
+                    "content_hash": document_content_hash,
+                    "chunk_index": chunk.chunk_index,
                     "chunk_id": chunk.chunk_id,
+                    "chunk_hash": chunk.content_hash,
+                    "ingestion_run_id": payload_run_id,
+                    "ingested_at": payload_time,
                     "text": chunk.text,
                     "header": chunk.header_path,
                     "graph_nodes": chunk_nodes.get(chunk.chunk_id, []),
@@ -1929,7 +2558,7 @@ async def stage3_and_optional_neo4j_incremental(
 
             batch_nodes = sum(len(p.nodes) for p in payloads)
             batch_edges = sum(len(p.edges) for p in payloads)
-            batch_errors = sum(1 for p in payloads if p.extraction_error or (not p.nodes and not p.edges))
+            batch_errors = sum(1 for p in payloads if p.extraction_error)
 
             stats.nodes_extracted += batch_nodes
             stats.edges_extracted += batch_edges
@@ -1981,6 +2610,270 @@ async def stage3_and_optional_neo4j_incremental(
             await neo4j_driver.close()
 
 
+async def ingest_pipeline_incremental(
+    source_dir: Path,
+    dry_run: bool = False,
+    limit_files: int | None = None,
+    limit_chunks: int | None = None,
+    refresh_markdown: bool = False,
+    use_resume: bool = True,
+    refresh_graph_cache: bool = False,
+    skip_graph_extraction: bool = False,
+    skip_neo4j: bool = False,
+    skip_qdrant: bool = False,
+    force_reingest: bool = False,
+    manifest_path: Path = DEFAULT_MANIFEST_PATH,
+) -> IngestionStats:
+    ensure_cache_dirs()
+    stats = IngestionStats()
+
+    logger.info("=" * 60)
+    logger.info("[INCREMENTAL] Planning source document ingestion")
+    logger.info("=" * 60)
+
+    source_files = discover_source_documents(source_dir)
+    if limit_files is not None and limit_files > 0:
+        logger.warning("[INCREMENTAL] Applying --limit-files=%d", limit_files)
+        source_files = source_files[:limit_files]
+
+    if not source_files:
+        logger.warning("[INCREMENTAL] No PDF/DOCX files found in %s", source_dir)
+        return stats
+
+    manifest = load_ingestion_manifest(manifest_path)
+    plan = get_incremental_file_plan(
+        files=source_files,
+        manifest=manifest,
+        force_reingest=force_reingest,
+    )
+    log_incremental_file_plan(plan)
+
+    if not plan["to_ingest"]:
+        logger.info("[INCREMENTAL] No new, changed, failed, or partial files to ingest.")
+        return stats
+
+    ingestion_run_id = uuid.uuid4().hex
+    logger.info("[INCREMENTAL] Ingestion run id: %s", ingestion_run_id)
+    logger.info("[INCREMENTAL] Manifest path: %s", manifest_path)
+
+    parser = build_llamaparse_parser()
+    remaining_chunks = limit_chunks if limit_chunks is not None and limit_chunks > 0 else None
+
+    for doc_number, file_info in enumerate(plan["to_ingest"], start=1):
+        if remaining_chunks is not None and remaining_chunks <= 0:
+            logger.warning(
+                "[INCREMENTAL] --limit-chunks reached. Leaving %s unmodified in manifest.",
+                file_info["source_path"],
+            )
+            continue
+
+        logger.info("=" * 60)
+        logger.info(
+            "[INCREMENTAL] Document %d/%d (%s): %s",
+            doc_number,
+            len(plan["to_ingest"]),
+            file_info["reason"],
+            file_info["source_path"],
+        )
+        logger.info("=" * 60)
+
+        if not dry_run:
+            update_manifest_before_ingest(manifest, file_info, ingestion_run_id)
+            save_ingestion_manifest(manifest_path, manifest)
+
+        warn_changed_document_cleanup(
+            file_info=file_info,
+            skip_neo4j=skip_neo4j,
+            skip_qdrant=skip_qdrant,
+            dry_run=dry_run,
+        )
+
+        stage1_already_recorded_error = False
+
+        try:
+            parsed = await stage1_extract_one_source(
+                source_path=file_info["path"],
+                parser=parser,
+                refresh_markdown=refresh_markdown,
+                stats=stats,
+            )
+            if parsed is None:
+                stage1_already_recorded_error = True
+                raise RuntimeError("Stage 1 extraction failed")
+
+            stats.pdf_files += 1
+            filename, markdown = parsed
+
+            logger.info("=" * 60)
+            logger.info("[STAGE 2] Markdown-Aware Chunking (chunk_size=%d)", CHUNK_SIZE)
+            logger.info("=" * 60)
+
+            chunks = stage2_chunk_markdown(filename, markdown)
+            original_chunk_count = len(chunks)
+            limit_chunks_used_for_doc = remaining_chunks is not None
+            truncated_by_limit = False
+
+            if remaining_chunks is not None:
+                if len(chunks) > remaining_chunks:
+                    logger.warning(
+                        "[STAGE 2] Applying --limit-chunks. %s produced %d chunks; "
+                        "processing only %d in this run.",
+                        filename,
+                        len(chunks),
+                        remaining_chunks,
+                    )
+                    chunks = chunks[:remaining_chunks]
+                    truncated_by_limit = True
+                remaining_chunks -= len(chunks)
+
+            if not chunks:
+                raise RuntimeError("No chunks produced")
+
+            ingested_at = utc_now_iso()
+            enrich_chunks_with_ingestion_metadata(
+                chunks=chunks,
+                file_info=file_info,
+                ingestion_run_id=ingestion_run_id,
+                ingested_at=ingested_at,
+            )
+
+            stats.chunks_created += len(chunks)
+            logger.info("[STAGE 2] Total semantic chunks for document: %d", len(chunks))
+
+            payloads = await stage3_and_optional_neo4j_incremental(
+                chunks=chunks,
+                dry_run=dry_run,
+                use_resume=use_resume,
+                refresh_graph_cache=refresh_graph_cache,
+                skip_graph_extraction=skip_graph_extraction,
+                skip_neo4j=skip_neo4j,
+                stats=stats,
+            )
+
+            graph_errors = sum(1 for payload in payloads if payload.extraction_error)
+            graph_tolerance = graph_error_tolerance_for_chunks(len(chunks))
+
+            qdrant_point_ids: list[str] = []
+
+            if dry_run:
+                logger.info("[DRY RUN] Stage 4A/4B writes and manifest update skipped.")
+                continue
+
+            if not skip_qdrant:
+                logger.info("=" * 60)
+                logger.info("[STAGE 4B] Qdrant Vector Indexing (dense + hashed sparse)")
+                logger.info("=" * 60)
+
+                vectors = await stage4b_upsert_qdrant(
+                    chunks,
+                    payloads,
+                    ingestion_run_id=ingestion_run_id,
+                    ingested_at=ingested_at,
+                )
+                stats.vectors_upserted_qdrant += vectors
+                qdrant_point_ids = qdrant_point_ids_for_chunks(chunks)
+            else:
+                logger.warning("[STAGE 4B] Skipped by --skip-qdrant")
+
+            skipped_components = []
+            if skip_neo4j:
+                skipped_components.append("Neo4j")
+            if skip_qdrant:
+                skipped_components.append("Qdrant")
+
+            graph_warning = None
+            graph_errors_within_tolerance = (
+                graph_errors > 0
+                and graph_errors <= graph_tolerance
+                and not limit_chunks_used_for_doc
+                and not skipped_components
+            )
+
+            if graph_errors_within_tolerance:
+                graph_warning = graph_warning_message(graph_errors, graph_tolerance)
+
+            if limit_chunks_used_for_doc or skipped_components or (graph_errors > 0 and not graph_errors_within_tolerance):
+                reasons = []
+                if limit_chunks_used_for_doc:
+                    reasons.append(
+                        f"--limit-chunks processed {len(chunks)}/{original_chunk_count} chunks"
+                        if truncated_by_limit
+                        else "--limit-chunks used"
+                    )
+                if skipped_components:
+                    reasons.append("skipped " + ", ".join(skipped_components))
+                if graph_errors > 0 and not graph_errors_within_tolerance:
+                    reasons.append(
+                        f"graph extraction failed for {graph_errors} chunk(s); "
+                        f"tolerance={graph_tolerance:g}"
+                    )
+                partial_reason = "; ".join(reasons)
+                update_manifest_after_failure(
+                    manifest=manifest,
+                    file_info=file_info,
+                    ingestion_run_id=ingestion_run_id,
+                    error=partial_reason,
+                    status="partial",
+                    chunk_count=len(chunks),
+                    qdrant_point_ids=qdrant_point_ids,
+                    last_ingested_at=ingested_at,
+                    graph_error_count=graph_errors,
+                    graph_error_tolerance=graph_tolerance,
+                )
+                save_ingestion_manifest(manifest_path, manifest)
+                logger.warning(
+                    "[MANIFEST] Marked partial for %s: %s",
+                    file_info["source_path"],
+                    partial_reason,
+                )
+                continue
+
+            update_manifest_after_success(
+                manifest=manifest,
+                source_path=str(file_info["source_path"]),
+                document_id=str(file_info["document_id"]),
+                content_hash=str(file_info["content_hash"]),
+                file_size=int(file_info["file_size"]),
+                modified_time=str(file_info["modified_time"]),
+                chunk_count=len(chunks),
+                qdrant_point_ids=qdrant_point_ids,
+                ingestion_run_id=ingestion_run_id,
+                last_ingested_at=ingested_at,
+                status="completed_with_warnings" if graph_warning else "completed",
+                error_message=graph_warning,
+                graph_error_count=graph_errors,
+                graph_error_tolerance=graph_tolerance,
+                warning=graph_warning,
+            )
+            save_ingestion_manifest(manifest_path, manifest)
+            logger.info(
+                "[MANIFEST] Marked %s: %s",
+                "completed_with_warnings" if graph_warning else "completed",
+                file_info["source_path"],
+            )
+
+        except Exception as exc:
+            logger.error(
+                "[INCREMENTAL] Failed to ingest %s: %s",
+                file_info["source_path"],
+                exc,
+                exc_info=True,
+            )
+            if not stage1_already_recorded_error:
+                stats.parse_errors += 1
+            if not dry_run:
+                update_manifest_after_failure(
+                    manifest=manifest,
+                    file_info=file_info,
+                    ingestion_run_id=ingestion_run_id,
+                    error=exc,
+                    status="failed",
+                )
+                save_ingestion_manifest(manifest_path, manifest)
+
+    return stats
+
+
 async def ingest_pipeline(
     source_dir: Path,
     dry_run: bool = False,
@@ -1992,9 +2885,30 @@ async def ingest_pipeline(
     skip_graph_extraction: bool = False,
     skip_neo4j: bool = False,
     skip_qdrant: bool = False,
+    incremental: bool = False,
+    force_reingest: bool = False,
+    manifest_path: Path = DEFAULT_MANIFEST_PATH,
 ) -> IngestionStats:
+    if incremental or force_reingest:
+        return await ingest_pipeline_incremental(
+            source_dir=source_dir,
+            dry_run=dry_run,
+            limit_files=limit_files,
+            limit_chunks=limit_chunks,
+            refresh_markdown=refresh_markdown,
+            use_resume=use_resume,
+            refresh_graph_cache=refresh_graph_cache,
+            skip_graph_extraction=skip_graph_extraction,
+            skip_neo4j=skip_neo4j,
+            skip_qdrant=skip_qdrant,
+            force_reingest=force_reingest,
+            manifest_path=manifest_path,
+        )
+
     ensure_cache_dirs()
     stats = IngestionStats()
+    ingestion_run_id = uuid.uuid4().hex
+    ingested_at = utc_now_iso()
 
     logger.info("=" * 60)
     logger.info("[STAGE 1] PDF Extraction via LlamaParse")
@@ -2017,15 +2931,46 @@ async def ingest_pipeline(
     logger.info("[STAGE 2] Markdown-Aware Chunking (chunk_size=%d)", CHUNK_SIZE)
     logger.info("=" * 60)
 
-    all_chunks: list[SemanticChunk] = []
+    doc_chunks: list[tuple[dict[str, Any], list[SemanticChunk]]] = []
 
-    for filename, markdown in parsed_docs:
+    for file_info, filename, markdown in parsed_docs:
         chunks = stage2_chunk_markdown(filename, markdown)
-        all_chunks.extend(chunks)
+        enrich_chunks_with_ingestion_metadata(
+            chunks=chunks,
+            file_info=file_info,
+            ingestion_run_id=ingestion_run_id,
+            ingested_at=ingested_at,
+        )
+        doc_chunks.append((file_info, chunks))
+
+    limit_chunks_truncated = limit_chunks is not None and limit_chunks > 0
 
     if limit_chunks is not None and limit_chunks > 0:
         logger.warning("[STAGE 2] Applying --limit-chunks=%d", limit_chunks)
-        all_chunks = all_chunks[:limit_chunks]
+        remaining_chunks = limit_chunks
+        limited_doc_chunks: list[tuple[dict[str, Any], list[SemanticChunk]]] = []
+        for file_info, chunks in doc_chunks:
+            if remaining_chunks <= 0:
+                limited_doc_chunks.append((file_info, []))
+                if chunks:
+                    limit_chunks_truncated = True
+                continue
+
+            if len(chunks) > remaining_chunks:
+                limited_doc_chunks.append((file_info, chunks[:remaining_chunks]))
+                remaining_chunks = 0
+                limit_chunks_truncated = True
+            else:
+                limited_doc_chunks.append((file_info, chunks))
+                remaining_chunks -= len(chunks)
+
+        doc_chunks = limited_doc_chunks
+
+    all_chunks: list[SemanticChunk] = [
+        chunk
+        for _, chunks in doc_chunks
+        for chunk in chunks
+    ]
 
     stats.chunks_created = len(all_chunks)
 
@@ -2034,6 +2979,13 @@ async def ingest_pipeline(
     if not all_chunks:
         logger.warning("No chunks produced. Aborting pipeline.")
         return stats
+
+    manifest: dict[str, Any] | None = None
+    if not dry_run:
+        manifest = load_ingestion_manifest(manifest_path)
+        for file_info, _ in doc_chunks:
+            update_manifest_before_ingest(manifest, file_info, ingestion_run_id)
+        save_ingestion_manifest(manifest_path, manifest)
 
     payloads = await stage3_and_optional_neo4j_incremental(
         chunks=all_chunks,
@@ -2047,10 +2999,12 @@ async def ingest_pipeline(
 
     if dry_run:
         logger.info("─" * 60)
-        logger.info("[DRY RUN] Stage 4A/4B skipped.")
+        logger.info("[DRY RUN] Stage 4A/4B and manifest writes skipped.")
         logger.info("─" * 60)
         stats.report()
         return stats
+
+    qdrant_upsert_succeeded = False
 
     if not skip_qdrant:
         logger.info("=" * 60)
@@ -2060,11 +3014,31 @@ async def ingest_pipeline(
         try:
             vectors = await stage4b_upsert_qdrant(all_chunks, payloads)
             stats.vectors_upserted_qdrant = vectors
+            qdrant_upsert_succeeded = True
         except Exception as exc:
             logger.error("[STAGE 4B] Failed: %s", exc, exc_info=True)
             stats.parse_errors += 1
     else:
         logger.warning("[STAGE 4B] Skipped by --skip-qdrant")
+
+    if manifest is not None:
+        global_error = None
+        if stats.parse_errors > 0:
+            global_error = f"pipeline completed with {stats.parse_errors} error(s)"
+        finalize_manifest_for_documents(
+            manifest=manifest,
+            doc_chunks=doc_chunks,
+            payloads=payloads,
+            ingestion_run_id=ingestion_run_id,
+            ingested_at=ingested_at,
+            skip_neo4j=skip_neo4j,
+            skip_qdrant=skip_qdrant,
+            qdrant_ids_available=qdrant_upsert_succeeded,
+            limit_chunks_truncated=limit_chunks_truncated,
+            global_error=global_error,
+        )
+        save_ingestion_manifest(manifest_path, manifest)
+        logger.info("[MANIFEST] Full ingestion manifest updated: %s", manifest_path)
 
     return stats
 
@@ -2115,6 +3089,26 @@ def parse_args() -> argparse.Namespace:
         "--refresh-markdown",
         action="store_true",
         help="Ignore Markdown cache and call LlamaParse again.",
+    )
+
+    parser.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Ingest only new, changed, failed, or partial source files using the manifest.",
+    )
+
+    parser.add_argument(
+        "--force-reingest",
+        action="store_true",
+        help="Ignore manifest skip decisions and reingest scanned files.",
+    )
+
+    parser.add_argument(
+        "--manifest-path",
+        type=Path,
+        default=DEFAULT_MANIFEST_PATH,
+        metavar="PATH",
+        help=f"Incremental ingestion manifest path. Default: {DEFAULT_MANIFEST_PATH}",
     )
 
     parser.add_argument(
@@ -2184,6 +3178,9 @@ async def main() -> int:
     logger.info("  Limit files             : %s", args.limit_files)
     logger.info("  Limit chunks            : %s", args.limit_chunks)
     logger.info("  Refresh markdown        : %s", args.refresh_markdown)
+    logger.info("  Incremental             : %s", args.incremental)
+    logger.info("  Force reingest          : %s", args.force_reingest)
+    logger.info("  Manifest path           : %s", args.manifest_path)
     logger.info("  Resume graph cache      : %s", graph_resume_enabled)
     logger.info("  Refresh graph cache     : %s", args.refresh_graph_cache)
     logger.info("  Clear graph cache       : %s", args.clear_graph_cache)
@@ -2205,6 +3202,9 @@ async def main() -> int:
                 args.limit_files is not None,
                 args.limit_chunks is not None,
                 args.refresh_markdown,
+                args.incremental,
+                args.force_reingest,
+                args.manifest_path != DEFAULT_MANIFEST_PATH,
                 args.no_resume_graph_cache,
                 args.refresh_graph_cache,
                 args.skip_graph_extraction,
@@ -2232,6 +3232,9 @@ async def main() -> int:
             skip_graph_extraction=args.skip_graph_extraction,
             skip_neo4j=args.skip_neo4j,
             skip_qdrant=args.skip_qdrant,
+            incremental=args.incremental,
+            force_reingest=args.force_reingest,
+            manifest_path=args.manifest_path,
         )
     except KeyboardInterrupt:
         logger.warning("Interrupted by user. You can rerun; cached chunks will resume.")
