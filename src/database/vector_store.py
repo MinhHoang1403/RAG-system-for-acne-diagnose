@@ -41,10 +41,19 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 VECTOR_DB_PROVIDER = os.getenv("VECTOR_DB_PROVIDER", "qdrant").lower()
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "").strip()
 QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "acne_knowledge")
 EMBEDDING_DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", "3072"))
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "models/gemini-embedding-001")
+
+
+def qdrant_client_kwargs() -> dict[str, Any]:
+    """Return AsyncQdrantClient kwargs without breaking unauthenticated local Qdrant."""
+    kwargs: dict[str, Any] = {"url": QDRANT_URL}
+    if QDRANT_API_KEY:
+        kwargs["api_key"] = QDRANT_API_KEY
+    return kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -186,18 +195,37 @@ class QdrantVectorStore(VectorStore):
     def __init__(self) -> None:
         from qdrant_client import AsyncQdrantClient  # type: ignore[import]
 
-        self._client = AsyncQdrantClient(url=QDRANT_URL)
+        self._client = AsyncQdrantClient(**qdrant_client_kwargs())
         self._collection = QDRANT_COLLECTION_NAME
 
     async def upsert(self, id: str, vector: list[float], payload: dict) -> None:
-        """Upsert a point with named dense vector ``"dense"``."""
-        from qdrant_client.models import PointStruct  # type: ignore[import]
+        """Upsert a point with named dense vector and sparse BM25 when text exists."""
+        from qdrant_client.models import PointStruct, SparseVector  # type: ignore[import]
+
+        text = str(
+            payload.get("text")
+            or payload.get("content")
+            or payload.get("page_content")
+            or ""
+        )
+        vectors: dict[str, Any] = {"dense": vector}
+        sparse = compute_sparse_vector(text)
+        if sparse["indices"]:
+            vectors["bm25"] = SparseVector(
+                indices=sparse["indices"],
+                values=sparse["values"],
+            )
+        else:
+            logger.warning(
+                "Upserting Qdrant point %s without bm25 sparse vector because payload text is empty.",
+                id,
+            )
 
         await self._client.upsert(
             collection_name=self._collection,
             points=[PointStruct(
                 id=id,
-                vector={"dense": vector},
+                vector=vectors,
                 payload=payload,
             )],
         )

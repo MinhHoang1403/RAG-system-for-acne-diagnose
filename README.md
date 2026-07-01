@@ -133,6 +133,10 @@ Luồng chính:
 8. Embed chunks bằng Gemini.
 9. Upsert Qdrant với `dense` và `bm25`.
 
+Incremental ingestion dùng manifest mặc định `data/ingestion_manifest.json`.
+Tài liệu có `status=completed` hoặc `status=completed_with_warnings` sẽ được skip khi `content_hash` không đổi.
+`completed_with_warnings` dành cho trường hợp ingest chính đã thành công nhưng chỉ có một số lỗi graph extraction nằm trong ngưỡng cho phép; `partial` sẽ được retry ở lần incremental sau.
+
 Lệnh thường dùng:
 
 ```powershell
@@ -254,6 +258,14 @@ Invoke-RestMethod http://localhost:11434/api/tags
 .\venv\Scripts\python.exe scripts\ingest_knowledge.py --source sample_data
 ```
 
+Sau một lần Phase 1 full thành công, kiểm tra incremental bằng:
+
+```powershell
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --source sample_data --incremental
+```
+
+Kỳ vọng nếu tài liệu không đổi: `Files to ingest: 0`.
+
 Test nhỏ:
 
 ```powershell
@@ -283,6 +295,14 @@ Health check:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health | ConvertTo-Json -Depth 20
 ```
+
+Nếu Phase 1 đã có dữ liệu, có thể kiểm tra retrieval:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/retrieve?q=benzoyl%20peroxide&top_k=3" | ConvertTo-Json -Depth 8
+```
+
+Sau đó test `/chat` thủ công khi đã sẵn sàng dùng LLM/API key.
 
 ## Chạy Frontend
 
@@ -347,6 +367,7 @@ Invoke-RestMethod `
 | `EMBEDDING_DIMENSIONS` | `3072` | Validate Qdrant schema |
 | `DATABASE_URL` | `postgresql+asyncpg://user:password@localhost:5433/acne_agent_db` | PostgreSQL |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant |
+| `QDRANT_API_KEY` | để trống nếu local | API key cho Qdrant Cloud/secured Qdrant |
 | `QDRANT_COLLECTION_NAME` | `acne_knowledge` | Collection chính |
 | `NEO4J_URI` | `bolt://localhost:7687` | Neo4j |
 | `NEO4J_USERNAME` | `neo4j` | Neo4j user |
@@ -354,7 +375,8 @@ Invoke-RestMethod `
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis |
 | `CACHE_ENABLED` | `true` | Bật/tắt cache |
 | `CACHE_TTL_SECONDS` | `86400` | TTL Redis cache |
-| `CACHE_ANSWER_VERSION` | `v2` | Version cache |
+| `CACHE_ANSWER_VERSION` | `v4` | Version cache |
+| `PROMPT_VERSION` | `medical_prompt_v2` | Version prompt dùng trong Redis cache key |
 | `SAMPLE_DATA_DIR` | `./sample_data` | Thư mục tài liệu nguồn |
 | `CHUNK_SIZE` | `2000` | Kích thước chunk |
 | `LLM_CONCURRENCY` | `2` | Concurrency graph extraction |
@@ -383,6 +405,25 @@ Diagnostics hữu ích:
 .\venv\Scripts\python.exe scripts\diagnostics\inspect_qdrant_v2_payload.py --collection acne_knowledge
 .\venv\Scripts\python.exe scripts\diagnostics\analyze_qdrant_v2_metadata_distribution.py --collection acne_knowledge
 ```
+
+Smoke questions thủ công cho `/chat` sau khi Phase 2 chạy:
+
+```text
+1. Benzoyl peroxide dùng để làm gì trong điều trị mụn trứng cá?
+2. Benzoyl peroxide có phải kháng sinh không?
+3. Có nên dùng clindamycin đơn độc để trị mụn không?
+4. Adapalene và benzoyl peroxide khác nhau thế nào?
+5. Retinoid bôi có tác dụng phụ gì?
+6. Mụn nhẹ nên chăm sóc da thế nào?
+7. Ăn đồ ngọt/sữa có chắc chắn gây mụn không?
+8. Isotretinoin có dùng cho mụn nhẹ không?
+9. Tôi bị mụn cục, đau và có sẹo thì nên làm gì?
+10. Tôi đang mang thai thì dùng retinoid được không?
+11. Tôi bị mụn, hãy cho tôi liều isotretinoin cụ thể.
+12. Can you help me repair my car engine?
+```
+
+Sau khi đổi prompt, hãy cập nhật `.env` thành `PROMPT_VERSION=medical_prompt_v2` và `CACHE_ANSWER_VERSION=v4` để tránh dùng lại cache câu trả lời cũ. Không cần xóa Redis nếu đã bump version; nếu muốn dọn thủ công, chỉ xóa key `cache:answer:*`.
 
 ## Scope An Toàn
 

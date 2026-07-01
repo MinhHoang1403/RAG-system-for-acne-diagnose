@@ -164,10 +164,11 @@ async def _setup_qdrant() -> None:
     try:
         from qdrant_client import AsyncQdrantClient
         from qdrant_client.models import Distance, SparseVectorParams, VectorParams
+        from src.database.vector_store import qdrant_client_kwargs
     except ImportError as exc:
         raise SystemExit("Missing dependency. Run: pip install qdrant-client") from exc
 
-    client = AsyncQdrantClient(url=QDRANT_URL)
+    client = AsyncQdrantClient(**qdrant_client_kwargs())
 
     def get_named_config(config, name: str):
         if config is None:

@@ -5,9 +5,11 @@ LangGraph nodes for Exact Normalized Answer Caching.
 """
 
 import logging
+import os
 from typing import Any
 
 from src.agent.state import ClinicalState
+from src.agent.text_encoding import repair_mojibake
 from src.cache.semantic_cache import (
     normalize_question,
     is_cacheable_question,
@@ -17,6 +19,26 @@ from src.cache.semantic_cache import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_cache_model_key(state: ClinicalState) -> tuple[str, str]:
+    """Resolve the provider/model pair used in Redis cache keys."""
+    provider = (state.get("llm_provider") or "gemini").lower()
+    model = state.get("llm_model")
+
+    if provider == "gemini":
+        resolved = model or os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
+        if resolved == "gemini-1.5-flash":
+            resolved = "gemini-2.5-flash"
+        return provider, resolved
+
+    if provider in {"ollama", "local"}:
+        resolved = model or os.getenv("OLLAMA_MODEL", "qwen2.5")
+        if ":" not in resolved:
+            resolved = f"{resolved}:latest"
+        return "ollama", resolved
+
+    return provider, model or "unknown"
 
 async def cache_lookup_node(state: ClinicalState) -> dict[str, Any]:
     """
@@ -89,17 +111,18 @@ async def cache_lookup_node(state: ClinicalState) -> dict[str, Any]:
         }
         
     # Attempt to retrieve from Redis
+    cache_provider, cache_model = _resolve_cache_model_key(state)
     cached_data = await get_exact_cache(
         normalized,
         intent=intent,
-        provider=state.get("llm_provider") or "gemini",
-        model=state.get("llm_model") or "unknown",
+        provider=cache_provider,
+        model=cache_model,
     )
     
     if cached_data:
         import os
         meta = cached_data.get("metadata", {})
-        expected_version = os.getenv("CACHE_ANSWER_VERSION", "v2")
+        expected_version = os.getenv("CACHE_ANSWER_VERSION", "v4")
         
         if not meta.get("quality_passed") or meta.get("answer_version") != expected_version:
             logger.info("Cache entry invalid or missing quality metadata. Treating as MISS.")
@@ -116,18 +139,19 @@ async def cache_lookup_node(state: ClinicalState) -> dict[str, Any]:
         # We need to construct metadata properly
         
         # Let's populate the state
+        cached_answer = repair_mojibake(cached_data.get("answer", ""))
         return {
             "cache_checked": True,
             "cache_hit": True,
             "cache_reason": "hit",
             "cache_intent": intent,
-            "cached_answer": cached_data.get("answer", ""),
+            "cached_answer": cached_answer,
             "cached_sources": cached_data.get("sources", []),
             "cache_metadata": cached_data.get("metadata", {}),
             "normalized_question": normalized,
             
             # Since it's a hit, we bypass LLM generation
-            "final_answer": cached_data.get("answer", ""),
+            "final_answer": cached_answer,
             "sources": cached_data.get("sources", []),
             "actual_provider": "cache",
             "actual_model": cached_data.get("model_name", "unknown")
@@ -196,7 +220,7 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
         return {}
         
     # Use final_answer (post-processed by finalize_response_node) instead of draft_answer
-    answer = state.get("final_answer", "")
+    answer = repair_mojibake(state.get("final_answer", ""))
     sources = state.get("sources", [])
     
     # --- QUALITY GATE ---
@@ -204,7 +228,6 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
         logger.info("Quality Gate Failed: Empty answer")
         return {}
         
-    import os
     min_chars = int(os.getenv("CACHE_MIN_ANSWER_CHARS", "350"))
     if len(answer) < min_chars:
         logger.info(f"Quality Gate Failed: Answer too short ({len(answer)} < {min_chars})")
@@ -307,7 +330,7 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
         "quality_checked": True,
         "quality_passed": True,
         "quality_reason": "passed_all_gates",
-        "answer_version": os.getenv("CACHE_ANSWER_VERSION", "v2"),
+        "answer_version": os.getenv("CACHE_ANSWER_VERSION", "v4"),
         "raw_question": raw_question,
         "standalone_question": standalone_q or "",
         "cache_key_question": target_question,
@@ -316,6 +339,7 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
     }
     
     # Store it
+    cache_provider, cache_model = _resolve_cache_model_key(state)
     logger.info(f"Storing cache: key_source={'standalone' if is_vague_followup else 'user'}, normalized='{normalized[:60]}...'")
     await set_answer_cache(
         normalized_question=normalized,
@@ -324,8 +348,8 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
         sources=sources,
         metadata=metadata,
         intent=intent,
-        provider=state.get("actual_provider") or state.get("llm_provider") or "gemini",
-        model=state.get("actual_model") or state.get("llm_model") or "unknown",
+        provider=cache_provider,
+        model=cache_model,
     )
     
     return {}

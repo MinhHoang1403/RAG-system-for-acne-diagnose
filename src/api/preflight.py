@@ -71,8 +71,9 @@ def _get_named_config(config: Any, name: str) -> Any | None:
 async def check_qdrant() -> CheckResult:
     try:
         from qdrant_client import AsyncQdrantClient
+        from src.database.vector_store import qdrant_client_kwargs
 
-        client = AsyncQdrantClient(url=QDRANT_URL)
+        client = AsyncQdrantClient(**qdrant_client_kwargs())
         try:
             info = await client.get_collection(collection_name=QDRANT_COLLECTION_NAME)
             params = info.config.params
@@ -115,7 +116,11 @@ async def check_qdrant() -> CheckResult:
         finally:
             await client.close()
     except Exception as exc:
-        return CheckResult("unavailable", str(exc))
+        return CheckResult(
+            "unavailable",
+            f"Cannot connect/authenticate to Qdrant at {QDRANT_URL}. "
+            f"Check QDRANT_URL and QDRANT_API_KEY. Error: {exc}",
+        )
 
 
 async def check_neo4j() -> CheckResult:

@@ -35,6 +35,25 @@ async def rewrite_question_node(state: ClinicalState) -> dict:
             "standalone_question": normalized,
             "use_history_context": False,
         }
+
+    explicit_primary_entities = [
+        "benzoyl peroxide",
+        "bp",
+        "adapalene",
+        "adapalen",
+        "clindamycin",
+        "erythromycin",
+        "isotretinoin",
+        "retinoid",
+        "tretinoin",
+        "tazarotene",
+        "trifarotene",
+    ]
+    if any(entity in normalized for entity in explicit_primary_entities):
+        return {
+            "standalone_question": normalized,
+            "use_history_context": False,
+        }
         
     ambiguous_keywords = [
         "nó", "loại đó", "cái đó", "thuốc đó", "vậy còn", "như trên", "còn cái này", "vậy",

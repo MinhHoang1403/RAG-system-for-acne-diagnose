@@ -10,6 +10,7 @@ import google.generativeai as genai
 from typing import Optional
 
 from src.agent.llm.ollama_client import generate_ollama_response, list_ollama_models
+from src.agent.text_encoding import repair_mojibake
 
 logger = logging.getLogger(__name__)
 
@@ -102,14 +103,20 @@ async def generate_llm_response(
         if provider == "gemini":
             logger.info(f"Calling Gemini ({model})...")
             if use_sync:
-                result["text"] = await _call_gemini_sync(prompt, system_prompt, model, temperature) # wrapper is still async
+                result["text"] = repair_mojibake(
+                    await _call_gemini_sync(prompt, system_prompt, model, temperature)
+                ) # wrapper is still async
             else:
-                result["text"] = await _call_gemini(prompt, system_prompt, model, temperature)
+                result["text"] = repair_mojibake(
+                    await _call_gemini(prompt, system_prompt, model, temperature)
+                )
             return result
             
         elif provider == "ollama":
             logger.info(f"Calling Ollama ({model})...")
-            result["text"] = await generate_ollama_response(model, system_prompt, prompt, temperature)
+            result["text"] = repair_mojibake(
+                await generate_ollama_response(model, system_prompt, prompt, temperature)
+            )
             return result
             
         else:
@@ -146,7 +153,9 @@ async def generate_llm_response(
             if fallback_model:
                 try:
                     logger.info(f"Fallback to Ollama ({fallback_model})...")
-                    text = await generate_ollama_response(fallback_model, system_prompt, prompt, temperature)
+                    text = repair_mojibake(
+                        await generate_ollama_response(fallback_model, system_prompt, prompt, temperature)
+                    )
                     result["text"] = text
                     result["fallback_used"] = True
                     result["fallback_provider"] = "ollama"
@@ -170,9 +179,13 @@ async def generate_llm_response(
             try:
                 logger.info(f"Fallback to Gemini ({fallback_model})...")
                 if use_sync:
-                    text = await _call_gemini_sync(prompt, system_prompt, fallback_model, temperature)
+                    text = repair_mojibake(
+                        await _call_gemini_sync(prompt, system_prompt, fallback_model, temperature)
+                    )
                 else:
-                    text = await _call_gemini(prompt, system_prompt, fallback_model, temperature)
+                    text = repair_mojibake(
+                        await _call_gemini(prompt, system_prompt, fallback_model, temperature)
+                    )
                 result["text"] = text
                 result["fallback_used"] = True
                 result["fallback_provider"] = "gemini"

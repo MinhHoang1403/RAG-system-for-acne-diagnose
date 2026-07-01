@@ -26,6 +26,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(name)s - %(mes
 logger = logging.getLogger(__name__)
 
 from src.agent.main import run_clinical_agent
+from src.agent.text_encoding import repair_mojibake
 
 # Input Control Config
 MAX_MESSAGE_CHARS = int(os.getenv("MAX_MESSAGE_CHARS", 500))
@@ -33,31 +34,15 @@ MAX_MESSAGE_WORDS = int(os.getenv("MAX_MESSAGE_WORDS", 120))
 MAX_QUESTION_MARKS = int(os.getenv("MAX_QUESTION_MARKS", 3))
 MAX_CONVERSATION_HISTORY_MESSAGES = int(os.getenv("MAX_CONVERSATION_HISTORY_MESSAGES", 10))
 MAX_HISTORY_MESSAGE_CHARS = int(os.getenv("MAX_HISTORY_MESSAGE_CHARS", 1000))
+CACHE_ANSWER_VERSION = os.getenv("CACHE_ANSWER_VERSION", "v4")
 
 # In-memory lock for session requests
 active_requests = set()
 
 
-def _repair_mojibake(value: str) -> str:
-    """Repair common UTF-8 text decoded as latin-1/cp1252 before reaching the API."""
-    if not isinstance(value, str) or not value:
-        return value
-    markers = ("Ã", "Ä", "á»", "áº", "Æ", "Â", "Ð")
-    if not any(marker in value for marker in markers):
-        return value
-    for encoding in ("latin1", "cp1252"):
-        try:
-            repaired = value.encode(encoding).decode("utf-8")
-        except UnicodeError:
-            continue
-        if repaired and sum(marker in repaired for marker in markers) < sum(marker in value for marker in markers):
-            return repaired
-    return value
-
-
 def _repair_history_messages(messages: list["ChatHistoryMessage"]) -> list["ChatHistoryMessage"]:
     for msg in messages:
-        msg.content = _repair_mojibake(msg.content)
+        msg.content = repair_mojibake(msg.content)
     return messages
 
 # Initialize FastAPI app
@@ -245,7 +230,7 @@ async def _load_recent_history_from_db(session_id: str) -> list[dict[str, str]]:
         return [
             {
                 "role": str(msg.get("role", ""))[:20],
-                "content": _repair_mojibake(str(msg.get("content", "")))[:MAX_HISTORY_MESSAGE_CHARS],
+                "content": repair_mojibake(str(msg.get("content", "")))[:MAX_HISTORY_MESSAGE_CHARS],
             }
             for msg in messages
             if msg.get("role") in {"user", "assistant"} and msg.get("content")
@@ -376,7 +361,7 @@ async def chat_endpoint(request: ChatRequest):
     After the agent responds, persists user message + assistant response
     to PostgreSQL (fire-and-forget: DB errors don't break the response).
     """
-    request.message = _repair_mojibake(request.message)
+    request.message = repair_mojibake(request.message)
     request.conversation_history = _repair_history_messages(request.conversation_history)
 
     message_trimmed = request.message.strip() if request.message else ""
@@ -525,7 +510,7 @@ async def chat_endpoint(request: ChatRequest):
         used_retrieval = is_in_domain is True
         retrieval_status = "hybrid_qdrant_neo4j" if used_retrieval else "skipped"
         
-        answer_text = result.get("answer", "")
+        answer_text = repair_mojibake(result.get("answer", ""))
         sources_list = result.get("sources", [])
         symptoms_list = result.get("symptoms", [])
         safety_flags_list = result.get("safety_flags", [])
@@ -546,7 +531,7 @@ async def chat_endpoint(request: ChatRequest):
                 "checked": bool(result.get("cache_checked")),
                 "hit": bool(result.get("cache_hit")),
                 "reason": result.get("cache_reason") if result.get("cache_checked") or result.get("cache_reason") == "bypassed" else ("out_of_domain" if not is_in_domain else "skipped"),
-                "answer_version": result.get("cache_metadata", {}).get("answer_version") if result.get("cache_hit") else os.getenv("CACHE_ANSWER_VERSION", "v1"),
+                "answer_version": result.get("cache_metadata", {}).get("answer_version") if result.get("cache_hit") else CACHE_ANSWER_VERSION,
                 "quality_checked": result.get("cache_metadata", {}).get("quality_checked") if result.get("cache_hit") else None,
                 "quality_passed": result.get("cache_metadata", {}).get("quality_passed") if result.get("cache_hit") else None,
                 "quality_reason": result.get("cache_metadata", {}).get("quality_reason") if result.get("cache_hit") else None
@@ -607,7 +592,7 @@ async def chat_endpoint(request: ChatRequest):
                     checked=bool(result.get("cache_checked")),
                     hit=bool(result.get("cache_hit")),
                     reason=result.get("cache_reason") if result.get("cache_checked") or result.get("cache_reason") == "bypassed" else ("out_of_domain" if not is_in_domain else "skipped"),
-                    answer_version=result.get("cache_metadata", {}).get("answer_version") if result.get("cache_hit") else os.getenv("CACHE_ANSWER_VERSION", "v1"),
+                    answer_version=result.get("cache_metadata", {}).get("answer_version") if result.get("cache_hit") else CACHE_ANSWER_VERSION,
                     quality_checked=result.get("cache_metadata", {}).get("quality_checked") if result.get("cache_hit") else None,
                     quality_passed=result.get("cache_metadata", {}).get("quality_passed") if result.get("cache_hit") else None,
                     quality_reason=result.get("cache_metadata", {}).get("quality_reason") if result.get("cache_hit") else None
@@ -821,7 +806,7 @@ async def rename_chat_session(session_id: str, body: RenameRequest):
     """Rename a chat session."""
     from src.database.repositories import chat_history as repo
     
-    body.title = _repair_mojibake(body.title)
+    body.title = repair_mojibake(body.title)
 
     if not body.title or not body.title.strip():
         raise HTTPException(status_code=400, detail="Title cannot be empty.")
@@ -908,7 +893,7 @@ async def sync_sessions(body: SyncRequest):
         async with db_session.begin():
             for s_payload in body.sessions:
                 try:
-                    s_payload.title = _repair_mojibake(s_payload.title)
+                    s_payload.title = repair_mojibake(s_payload.title)
                     exists = await repo.session_exists(
                         session=db_session,
                         session_id=s_payload.id,
@@ -930,7 +915,7 @@ async def sync_sessions(body: SyncRequest):
                     )
                     
                     for idx, msg in enumerate(s_payload.messages):
-                        msg.content = _repair_mojibake(msg.content)
+                        msg.content = repair_mojibake(msg.content)
                         # Generate deterministic message ID from session+index
                         # to avoid duplicates across multiple syncs
                         msg_id = msg.id or f"{s_payload.id}_msg_{idx}"

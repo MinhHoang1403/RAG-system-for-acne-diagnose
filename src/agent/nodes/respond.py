@@ -7,8 +7,73 @@ LangGraph nodes for finalizing the response.
 import logging
 
 from src.agent.state import ClinicalState
+from src.agent.text_encoding import repair_mojibake
 
 logger = logging.getLogger(__name__)
+
+
+_SECTION_HEADINGS = [
+    "**Tóm tắt ngắn**",
+    "**Giải thích/cơ chế**",
+    "**Chăm sóc/điều trị thường gặp**",
+    "**Điều trị thường gặp theo tài liệu**",
+    "**Lưu ý theo mức độ mụn**",
+    "**Tác dụng phụ/cảnh báo**",
+    "**Lưu ý an toàn/tác dụng phụ**",
+    "**Khi nào nên gặp bác sĩ**",
+    "**Phối hợp**",
+    "**Lưu ý**",
+]
+
+
+def _dedupe_section_headings(text: str) -> str:
+    """Keep only the first occurrence of each markdown section heading."""
+    lines = text.splitlines()
+    seen: set[str] = set()
+    output: list[str] = []
+    skip_until_next_heading = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped in _SECTION_HEADINGS:
+            if stripped in seen:
+                skip_until_next_heading = True
+                continue
+            seen.add(stripped)
+            skip_until_next_heading = False
+            output.append(line)
+            continue
+        if skip_until_next_heading and stripped in _SECTION_HEADINGS:
+            skip_until_next_heading = False
+        if skip_until_next_heading:
+            continue
+        output.append(line)
+
+    return "\n".join(output).strip()
+
+
+def _has_sufficient_answer_structure(text: str) -> bool:
+    """Allow flexible medical-answer sections without forcing a generic wrapper."""
+    has_summary = "**Tóm tắt ngắn**" in text
+    has_note = "**Lưu ý**" in text
+    has_referral = "**Khi nào nên gặp bác sĩ**" in text
+    has_body = any(
+        heading in text
+        for heading in [
+            "**Giải thích/cơ chế**",
+            "**Chăm sóc/điều trị thường gặp**",
+            "**Điều trị thường gặp theo tài liệu**",
+            "**Phối hợp**",
+        ]
+    ) or "| Hoạt chất |" in text
+    has_safety = any(
+        heading in text
+        for heading in [
+            "**Lưu ý an toàn/tác dụng phụ**",
+            "**Tác dụng phụ/cảnh báo**",
+        ]
+    ) or "| Hoạt chất |" in text
+    return has_summary and has_body and has_safety and has_referral and has_note
 
 
 async def finalize_response_node(state: ClinicalState) -> dict:
@@ -106,7 +171,7 @@ async def finalize_response_node(state: ClinicalState) -> dict:
         logger.debug("Finalizing cached response.")
         return {} # Keep existing final_answer set by cache_lookup
         
-    draft = state.get("draft_answer", "")
+    draft = repair_mojibake(state.get("draft_answer", ""))
     
     # Post-process Qwen (or any model) output to ensure safety
     import re
@@ -228,8 +293,30 @@ async def finalize_response_node(state: ClinicalState) -> dict:
         for kw in ["cho con bú", "đang cho con bú", "nuôi con bằng sữa mẹ"]
     )
     pregnancy_or_breastfeeding_context = pregnancy_context or breastfeeding_context
-    benzoyl_peroxide_question = "benzoyl peroxide" in combined_question_context
+    benzoyl_peroxide_question = bool(
+        re.search(r"\bbenzoyl\s+peroxide\b|\bbp\b", combined_question_context, flags=re.IGNORECASE)
+    )
+    bp_antibiotic_identity_question = benzoyl_peroxide_question and any(
+        marker in combined_question_context
+        for marker in [
+            "có phải kháng sinh không",
+            "phải kháng sinh không",
+            "là kháng sinh không",
+            "is benzoyl peroxide an antibiotic",
+            "is bp an antibiotic",
+        ]
+    )
     adapalene_question = "adapalene" in combined_question_context or "adapalen" in combined_question_context
+    clindamycin_monotherapy_question = (
+        "clindamycin" in combined_question_context
+        and any(marker in combined_question_context for marker in ["đơn độc", "đơn trị liệu", "monotherapy"])
+        and any(marker in combined_question_context for marker in ["có nên", "nên dùng", "dùng được không"])
+    )
+    adapalene_bp_comparison_question = (
+        adapalene_question
+        and benzoyl_peroxide_question
+        and any(marker in combined_question_context for marker in ["khác nhau", "khác gì", "so sánh", "versus", " vs "])
+    )
     lemon_question = "nước chanh" in user_question or "chanh" in user_question
     chocolate_question = "chocolate" in combined_question_context
 
@@ -257,7 +344,23 @@ async def finalize_response_node(state: ClinicalState) -> dict:
             "Nên khám da liễu nếu mụn viêm tăng, đau, để lại sẹo/thâm nhiều hoặc không cải thiện sau chăm sóc cơ bản.\n\n"
             "**Lưu ý**\n"
         )
-    elif antibiotic_question and any(kw in user_question for kw in ["có cần uống", "uống kháng sinh", "cần uống", "kháng sinh không"]):
+    elif bp_antibiotic_identity_question:
+        draft = (
+            "**Tóm tắt ngắn**\n"
+            "Không, Benzoyl peroxide không phải là kháng sinh.\n\n"
+            "**Giải thích/cơ chế**\n"
+            "Benzoyl peroxide là hoạt chất bôi trị mụn có tác dụng kháng khuẩn/antimicrobial và hỗ trợ giảm bít tắc nang lông, tiêu sừng nhẹ. "
+            "Nó khác với kháng sinh bôi như clindamycin hoặc erythromycin.\n\n"
+            "**Chăm sóc/điều trị thường gặp**\n"
+            "Trong điều trị mụn, benzoyl peroxide có thể được dùng đơn độc trong một số trường hợp phù hợp hoặc phối hợp với retinoid/kháng sinh bôi tùy mức độ và hướng dẫn chuyên môn.\n\n"
+            "**Lưu ý an toàn/tác dụng phụ**\n"
+            "Hoạt chất này có thể gây khô, đỏ, bong tróc, châm chích hoặc kích ứng, và có thể làm bạc màu tóc, vải hoặc quần áo. "
+            "Khi phối hợp với kháng sinh bôi, benzoyl peroxide giúp giảm nguy cơ kháng kháng sinh.\n\n"
+            "**Khi nào nên gặp bác sĩ**\n"
+            "Nên gặp bác sĩ da liễu nếu mụn viêm nhiều, đau, có sẹo/nguy cơ sẹo, hoặc da kích ứng nặng khi dùng sản phẩm trị mụn.\n\n"
+            "**Lưu ý**\n"
+        )
+    elif antibiotic_question and not benzoyl_peroxide_question and any(kw in user_question for kw in ["có cần uống", "uống kháng sinh", "cần uống", "kháng sinh không"]):
         draft = (
             "**Tóm tắt ngắn**\n"
             "Không nên tự uống kháng sinh để trị mụn. Kháng sinh đường uống chỉ nên dùng khi bác sĩ da liễu đánh giá là cần.\n\n"
@@ -269,6 +372,20 @@ async def finalize_response_node(state: ClinicalState) -> dict:
             "Không tự dùng, dùng lại đơn cũ hoặc dùng kéo dài kháng sinh. Nếu bác sĩ kê kháng sinh, cần dùng đúng hướng dẫn và tái khám.\n\n"
             "**Khi nào nên gặp bác sĩ**\n"
             "Nên khám nếu mụn viêm nhiều, đau, có nang/cục, để lại sẹo hoặc ảnh hưởng nhiều đến sinh hoạt.\n\n"
+            "**Lưu ý**\n"
+        )
+    elif clindamycin_monotherapy_question:
+        draft = (
+            "**Tóm tắt ngắn**\n"
+            "Không. Clindamycin không nên được dùng đơn độc để trị mụn.\n\n"
+            "**Giải thích/cơ chế**\n"
+            "Clindamycin là kháng sinh bôi. Dùng kháng sinh bôi đơn trị liệu dễ làm tăng nguy cơ kháng kháng sinh và không phải cách dùng được khuyến nghị trong tài liệu hiện có.\n\n"
+            "**Điều trị thường gặp theo tài liệu**\n"
+            "Nếu bác sĩ chỉ định kháng sinh bôi, thuốc thường được phối hợp với benzoyl peroxide để tăng hiệu quả và giảm nguy cơ kháng kháng sinh.\n\n"
+            "**Tác dụng phụ/cảnh báo**\n"
+            "Không tự dùng kéo dài hoặc dùng lại đơn cũ. Nếu da kích ứng, đỏ rát hoặc mụn nặng lên, nên ngừng sản phẩm nghi ngờ và hỏi bác sĩ.\n\n"
+            "**Khi nào nên gặp bác sĩ**\n"
+            "Nên gặp bác sĩ da liễu nếu mụn viêm nhiều, đau, có sẹo/nguy cơ sẹo hoặc cần thuốc kháng sinh trị mụn.\n\n"
             "**Lưu ý**\n"
         )
     elif pregnancy_context and retinoid_context:
@@ -353,6 +470,20 @@ async def finalize_response_node(state: ClinicalState) -> dict:
             "Không cần kiêng cực đoan chỉ vì nghe nói chocolate gây mụn nếu chưa có bằng chứng cá nhân rõ ràng.\n\n"
             "**Khi nào nên gặp bác sĩ**\n"
             "Nên gặp bác sĩ nếu mụn viêm nhiều, kéo dài hoặc ảnh hưởng nhiều đến sinh hoạt.\n\n"
+            "**Lưu ý**\n"
+        )
+    elif adapalene_bp_comparison_question:
+        draft = (
+            "**Tóm tắt ngắn**\n"
+            "Adapalene và benzoyl peroxide đều là hoạt chất bôi trị mụn, nhưng tác động lên các cơ chế khác nhau.\n\n"
+            "| Hoạt chất | Vai trò | Lưu ý an toàn |\n"
+            "|---|---|---|\n"
+            "| Adapalene | Retinoid bôi, giúp điều hòa sừng hóa nang lông, giảm bít tắc/nhân mụn và có tác dụng chống viêm. | Có thể gây khô, đỏ, bong tróc, kích ứng; cần cẩn trọng trong thai kỳ và nên hỏi bác sĩ nếu đang mang thai/chuẩn bị mang thai. |\n"
+            "| Benzoyl peroxide | Không phải kháng sinh; là hoạt chất bôi có tác dụng kháng khuẩn/antimicrobial với C. acnes và hỗ trợ giảm bít tắc/tiêu sừng nhẹ. | Có thể gây khô, đỏ, bong tróc, châm chích/kích ứng và có thể làm bạc màu vải, tóc hoặc quần áo. |\n\n"
+            "**Phối hợp**\n"
+            "Hai hoạt chất này có thể được phối hợp trong một số phác đồ vì tác động lên các cơ chế khác nhau của mụn. Khi phối hợp hoặc khi da nhạy cảm, nên dùng theo hướng dẫn chuyên môn để giảm kích ứng.\n\n"
+            "**Khi nào nên gặp bác sĩ**\n"
+            "Nên gặp bác sĩ da liễu nếu mụn viêm nhiều, đau, có sẹo/nguy cơ sẹo, đang mang thai/cho con bú, hoặc da kích ứng mạnh khi dùng hoạt chất trị mụn.\n\n"
             "**Lưu ý**\n"
         )
     elif adapalene_question:
@@ -556,6 +687,7 @@ async def finalize_response_node(state: ClinicalState) -> dict:
             flags=re.IGNORECASE,
         )
     draft = re.sub(r"(\*\*Lưu ý\*\*)\s*[-–]\s*$", r"\1", draft, flags=re.MULTILINE)
+    draft = _dedupe_section_headings(draft)
     draft = re.sub(r"\n{3,}", "\n\n", draft).strip()
 
     disclaimer = "Thông tin này chỉ mang tính tham khảo và không thay thế tư vấn y khoa chuyên nghiệp."
@@ -570,7 +702,7 @@ async def finalize_response_node(state: ClinicalState) -> dict:
         "**Khi nào nên gặp bác sĩ**",
         "**Lưu ý**",
     ]
-    if not all(heading in draft for heading in required_headings):
+    if not all(heading in draft for heading in required_headings) and not _has_sufficient_answer_structure(draft):
         draft = (
             "**Tóm tắt ngắn**\n"
             + (draft or "Tôi chưa có đủ thông tin để trả lời chi tiết.")
@@ -589,7 +721,8 @@ async def finalize_response_node(state: ClinicalState) -> dict:
         draft = before_note.rstrip() + "\n\n" + note + "\n" + after_note.strip()
 
     draft = re.sub(r"(\*\*Lưu ý\*\*)\s*[-–]\s*$", r"\1", draft, flags=re.MULTILINE).rstrip()
+    draft = _dedupe_section_headings(draft)
     draft = draft.rstrip() + "\n" + disclaimer
     
     logger.debug("Finalizing response.")
-    return {"final_answer": draft.strip()}
+    return {"final_answer": repair_mojibake(draft.strip())}

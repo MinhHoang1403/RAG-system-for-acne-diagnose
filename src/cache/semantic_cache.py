@@ -11,10 +11,11 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional, Tuple
 
+from src.agent.text_encoding import repair_mojibake
 from src.cache.redis_cache import get_redis
 
 CACHE_SCHEMA_VERSION = os.getenv("CACHE_SCHEMA_VERSION", "v2")
-CACHE_PROMPT_VERSION = os.getenv("CACHE_PROMPT_VERSION", "medical_answer_v4")
+CACHE_PROMPT_VERSION = os.getenv("CACHE_PROMPT_VERSION", "medical_prompt_v2")
 
 
 def infer_cache_intent(question: str, guardrail_status: str) -> str:
@@ -133,7 +134,7 @@ def make_cache_key(
     Generate a Redis cache key based on the normalized question and versions.
     Format: cache:answer:{answer_version}:{hash}
     """
-    answer_version = os.getenv("CACHE_ANSWER_VERSION", "v2")
+    answer_version = os.getenv("CACHE_ANSWER_VERSION", "v4")
     prompt_version = os.getenv("PROMPT_VERSION", CACHE_PROMPT_VERSION)
     kb_version = os.getenv("KB_VERSION", "acne_kb_v1")
     
@@ -177,6 +178,8 @@ async def get_exact_cache(
             parsed = json.loads(cached_data)
             if not isinstance(parsed, dict):
                 return None
+            if isinstance(parsed.get("answer"), str):
+                parsed["answer"] = repair_mojibake(parsed["answer"])
             return parsed
     except Exception:
         pass
@@ -209,11 +212,11 @@ async def set_answer_cache(
     data = {
         "normalized_question": normalized_question,
         "standalone_question": standalone_question,
-        "answer": answer,
+        "answer": repair_mojibake(answer),
         "sources": sources,
         "metadata": metadata,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "answer_version": os.getenv("CACHE_ANSWER_VERSION", "v2"),
+        "answer_version": os.getenv("CACHE_ANSWER_VERSION", "v4"),
         "model_provider": metadata.get("provider"),
         "model_name": metadata.get("model"),
         "retrieval_method": metadata.get("retrieval"),
@@ -223,7 +226,7 @@ async def set_answer_cache(
     }
     
     try:
-        await redis.setex(cache_key, ttl_seconds, json.dumps(data))
+        await redis.setex(cache_key, ttl_seconds, json.dumps(data, ensure_ascii=False))
         import logging
         logging.getLogger(__name__).info(f"Successfully cached answer for {cache_key}")
     except Exception as e:
