@@ -44,7 +44,7 @@ Giới hạn hiện tại:
 | LLM | Gemini, Ollama fallback/tuỳ chọn |
 | Local model | Ollama, mặc định `qwen2.5` |
 | Parsing tài liệu | LlamaParse |
-| Embedding | Gemini `models/gemini-embedding-001`, dim `3072` |
+| Embedding | Gemini `models/gemini-embedding-2`, dim `3072` |
 | Vector DB | Qdrant collection `acne_knowledge`, vector `dense`, sparse `bm25` |
 | Graph DB | Neo4j 5 + APOC |
 | Relational DB | PostgreSQL 16 |
@@ -136,6 +136,10 @@ Luồng chính:
 Incremental ingestion dùng manifest mặc định `data/ingestion_manifest.json`.
 Tài liệu có `status=completed` hoặc `status=completed_with_warnings` sẽ được skip khi `content_hash` không đổi.
 `completed_with_warnings` dành cho trường hợp ingest chính đã thành công nhưng chỉ có một số lỗi graph extraction nằm trong ngưỡng cho phép; `partial` sẽ được retry ở lần incremental sau.
+Manifest lưu `qdrant_point_ids`, `qdrant_point_count`, collection và metadata version/embedding theo từng document.
+Khi incremental gặp file `changed`, `partial`, `failed` hoặc `cleanup_failed` cần retry, pipeline sẽ cleanup Qdrant cũ trước khi upsert lại: ưu tiên xóa theo `qdrant_point_ids`, fallback bằng filter scoped theo `document_id`/`source_path`/`kb_version`.
+Guard cleanup chỉ cho phép collection chunk (`QDRANT_COLLECTION_NAME` hoặc `CHUNK_QDRANT_COLLECTION_NAME`) và không cleanup entity collection như `acne_entities_v1`.
+Neo4j graph cũ chưa được cleanup tự động trong bước này.
 
 Lệnh thường dùng:
 
@@ -149,7 +153,26 @@ Lệnh thường dùng:
 .\venv\Scripts\python.exe scripts\ingest_knowledge.py --skip-neo4j
 .\venv\Scripts\python.exe scripts\ingest_knowledge.py --skip-qdrant
 .\venv\Scripts\python.exe scripts\ingest_knowledge.py --dry-run
+.\venv\Scripts\python.exe scripts\inspect_ingestion_manifest.py --show-missing
 ```
+
+### Phase 1 Readiness Eval
+
+Eval offline trước clean rebuild dùng golden set tại `tests/golden/phase1_ingest_eval_cases.json`.
+Eval này không chạy ingestion, không connect Qdrant/Neo4j, không gọi Gemini.
+
+```powershell
+.\venv\Scripts\python.exe -m pytest tests\test_phase1_ingest_eval.py -q --no-cov
+.\venv\Scripts\python.exe scripts\eval_phase1_readiness.py --verbose
+```
+
+Pass criteria chính:
+- `Dalacin T -> clindamycin -> topical_antibiotic`
+- `Epiduo -> adapalene + benzoyl_peroxide`
+- `Differin -> adapalene -> topical_retinoid`
+- `benzoyl_peroxide` và `adapalene` không bị map thành antibiotic
+- cleanup planning không bao giờ target `acne_entities_v1`
+- entity payload có embedding/version metadata
 
 ## Phase 2 Online Chat/RAG
 
@@ -249,6 +272,67 @@ Invoke-RestMethod http://localhost:11434/api/tags
 `init_schema.py` tạo/validate PostgreSQL và Qdrant collection `acne_knowledge` với `dense=3072` và `bm25`.
 
 `init_chat_schema.py` tạo `chat_sessions`, `chat_messages` và index liên quan bằng `CREATE TABLE IF NOT EXISTS`; script không xoá dữ liệu cũ.
+
+## Entity-Centric Knowledge Index
+
+Pha 1 entity index tạo collection riêng `acne_entities_v1` cho `EntityCard` build từ `data/taxonomy/drug_aliases.yaml`. Collection chunk runtime hiện tại (`QDRANT_COLLECTION_NAME`, mặc định `acne_knowledge`) không bị đổi.
+
+Dry-run, không ghi Qdrant và không gọi embedding:
+
+```powershell
+.\venv\Scripts\python.exe scripts\build_entity_index.py --dry-run
+```
+
+Upsert thật vào entity collection sau khi đã cấu hình `GOOGLE_API_KEY`:
+
+```powershell
+.\venv\Scripts\python.exe scripts\build_entity_index.py --no-dry-run --collection acne_entities_v1
+```
+
+Entity collection dùng schema Qdrant tương tự chunks: named dense vector `dense` với `EMBEDDING_DIMENSIONS` và sparse vector `bm25`. Không dùng `--recreate true` với collection chunk.
+
+Payload entity cards ghi metadata version/embedding để validate sau clean rebuild: `embedding_provider`, `embedding_model`, `embedding_dimensions`, `kb_version`, `taxonomy_version`, `entity_schema_version`.
+
+## Deterministic Entity Graph
+
+Pha 1 deterministic entity graph tạo Neo4j layer tối thiểu từ taxonomy/`EntityCard`, không dùng LLM và không thay thế graph extraction hiện tại. Layer này chỉ chứa labels `DrugProduct`, `ActiveIngredient`, `DrugClass`, `Condition`, `SafetyContext`, `SideEffect` và các relationship tối thiểu như `HAS_ACTIVE_INGREDIENT`, `BELONGS_TO_CLASS`, `USED_FOR`, `HAS_SIDE_EFFECT`, `CONTRAINDICATED_IN`.
+
+Dry-run, không connect Neo4j:
+
+```powershell
+.\venv\Scripts\python.exe scripts\build_entity_graph.py --dry-run
+```
+
+Sau clean rebuild, apply schema + upsert deterministic graph khi đã sẵn sàng:
+
+```powershell
+.\venv\Scripts\python.exe scripts\build_entity_graph.py --apply-schema --upsert --validate
+```
+
+Script không có option xoá graph. Neo4j writes dùng `MERGE` và chỉ upsert deterministic entity nodes/relationships.
+
+Validate chunk/entity collections sau clean rebuild:
+
+```powershell
+.\venv\Scripts\python.exe scripts\validate_kb_collections.py --strict true
+```
+
+Script validate chỉ đọc Qdrant: kiểm tra collection tồn tại, dense `dense`, sparse `bm25`, dimensions, sample payload metadata và compatibility giữa chunk/entity collection.
+
+## Clean Rebuild Flow
+
+Khi cần rebuild sạch toàn bộ KB sau Pha 1, hãy dừng API trước và backup dữ liệu nếu cần. Sau đó developer có thể reset Docker volumes/data theo quy trình riêng của môi trường, rồi chạy lại theo thứ tự:
+
+1. Start backing services bằng Docker Compose.
+2. Chạy `scripts/init_schema.py`.
+3. Ingest chunk collection với `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS` hiện tại.
+4. Build entity index bằng cùng embedding config.
+5. Dry-run deterministic entity graph bằng `scripts/build_entity_graph.py --dry-run`.
+6. Apply schema + upsert entity graph bằng `scripts/build_entity_graph.py --apply-schema --upsert --validate`.
+7. Validate bằng `scripts/validate_kb_collections.py --strict true`.
+8. Chỉ chuyển Phase 2 retrieval sang collection mới sau khi validate pass.
+
+Trong giai đoạn chuyển tiếp, `QDRANT_COLLECTION_NAME=acne_knowledge` vẫn là runtime hiện tại. `CHUNK_QDRANT_COLLECTION_NAME=acne_chunks_v1` là tên target cho clean rebuild tương lai; chỉ chuyển runtime sang collection này khi Phase 2 retrieval đã hỗ trợ.
 
 ## Chạy Ingestion
 
@@ -359,16 +443,19 @@ Invoke-RestMethod `
 | Biến | Giá trị ví dụ | Vai trò |
 |---|---|---|
 | `GOOGLE_API_KEY` | `...` | Gemini generation và embedding |
-| `GOOGLE_MODEL` | `gemini-2.5-flash` | Model sinh câu trả lời |
+| `GOOGLE_MODEL` | `gemini-3.5-flash` | Model sinh câu trả lời |
 | `LLAMA_CLOUD_API_KEY` | `...` | LlamaParse |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server |
 | `OLLAMA_MODEL` | `qwen2.5` | Graph extraction/fallback |
-| `EMBEDDING_MODEL` | `models/gemini-embedding-001` | Embedding |
+| `EMBEDDING_PROVIDER` | `google` | Provider embedding dùng cho KB payload metadata |
+| `EMBEDDING_MODEL` | `models/gemini-embedding-2` | Embedding |
 | `EMBEDDING_DIMENSIONS` | `3072` | Validate Qdrant schema |
 | `DATABASE_URL` | `postgresql+asyncpg://user:password@localhost:5433/acne_agent_db` | PostgreSQL |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant |
 | `QDRANT_API_KEY` | để trống nếu local | API key cho Qdrant Cloud/secured Qdrant |
 | `QDRANT_COLLECTION_NAME` | `acne_knowledge` | Collection chính |
+| `CHUNK_QDRANT_COLLECTION_NAME` | `acne_chunks_v1` | Tên collection chunk mục tiêu tương lai, không đổi runtime hiện tại |
+| `ENTITY_QDRANT_COLLECTION_NAME` | `acne_entities_v1` | Collection entity cards riêng |
 | `NEO4J_URI` | `bolt://localhost:7687` | Neo4j |
 | `NEO4J_USERNAME` | `neo4j` | Neo4j user |
 | `NEO4J_PASSWORD` | `password` | Neo4j password |
@@ -377,6 +464,11 @@ Invoke-RestMethod `
 | `CACHE_TTL_SECONDS` | `86400` | TTL Redis cache |
 | `CACHE_ANSWER_VERSION` | `v4` | Version cache |
 | `PROMPT_VERSION` | `medical_prompt_v2` | Version prompt dùng trong Redis cache key |
+| `KB_VERSION` | `acne_kb_v1` | Version KB dùng cho chunk/entity payload |
+| `TAXONOMY_VERSION` | `drug_taxonomy_v1` | Version taxonomy entity |
+| `ENTITY_SCHEMA_VERSION` | `entity_schema_v1` | Version schema entity card |
+| `CHUNK_SCHEMA_VERSION` | `chunk_schema_v2` | Version schema chunk payload |
+| `INGESTION_PIPELINE_VERSION` | `ingestion_pipeline_v2` | Version pipeline ingestion |
 | `SAMPLE_DATA_DIR` | `./sample_data` | Thư mục tài liệu nguồn |
 | `CHUNK_SIZE` | `2000` | Kích thước chunk |
 | `LLM_CONCURRENCY` | `2` | Concurrency graph extraction |
@@ -404,6 +496,8 @@ Diagnostics hữu ích:
 .\venv\Scripts\python.exe scripts\diagnostics\smoke_chat_history_api.py
 .\venv\Scripts\python.exe scripts\diagnostics\inspect_qdrant_v2_payload.py --collection acne_knowledge
 .\venv\Scripts\python.exe scripts\diagnostics\analyze_qdrant_v2_metadata_distribution.py --collection acne_knowledge
+.\venv\Scripts\python.exe scripts\validate_kb_collections.py --strict true
+.\venv\Scripts\python.exe scripts\build_entity_graph.py --dry-run
 ```
 
 Smoke questions thủ công cho `/chat` sau khi Phase 2 chạy:

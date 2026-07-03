@@ -1,0 +1,176 @@
+[
+  {
+    "id": "dalacin_t_identity",
+    "query": "Dalacin T là gì?",
+    "expected": {
+      "drug_product": ["Dalacin T"],
+      "active_ingredient": ["clindamycin"],
+      "drug_class": ["topical_antibiotic"],
+      "entity_type_expected": "drug_product",
+      "required_graph_edges": [
+        {
+          "source_label": "DrugProduct",
+          "source_name": "Dalacin T",
+          "relationship": "HAS_ACTIVE_INGREDIENT",
+          "target_label": "ActiveIngredient",
+          "target_name": "clindamycin"
+        },
+        {
+          "source_label": "ActiveIngredient",
+          "source_name": "clindamycin",
+          "relationship": "BELONGS_TO_CLASS",
+          "target_label": "DrugClass",
+          "target_name": "topical_antibiotic"
+        }
+      ]
+    }
+  },
+  {
+    "id": "epiduo_contains_bpo",
+    "query": "Epiduo có BPO không?",
+    "expected": {
+      "drug_product": ["Epiduo"],
+      "active_ingredient": ["adapalene", "benzoyl_peroxide"],
+      "drug_class": ["topical_retinoid", "benzoyl_peroxide"],
+      "entity_type_expected": "drug_product",
+      "required_graph_edges": [
+        {
+          "source_label": "DrugProduct",
+          "source_name": "Epiduo",
+          "relationship": "HAS_ACTIVE_INGREDIENT",
+          "target_label": "ActiveIngredient",
+          "target_name": "adapalene"
+        },
+        {
+          "source_label": "DrugProduct",
+          "source_name": "Epiduo",
+          "relationship": "HAS_ACTIVE_INGREDIENT",
+          "target_label": "ActiveIngredient",
+          "target_name": "benzoyl_peroxide"
+        },
+        {
+          "source_label": "ActiveIngredient",
+          "source_name": "adapalene",
+          "relationship": "BELONGS_TO_CLASS",
+          "target_label": "DrugClass",
+          "target_name": "topical_retinoid"
+        }
+      ],
+      "negative_expectations": {
+        "drug_class_absent": ["topical_antibiotic", "oral_antibiotic"],
+        "forbidden_graph_edges": [
+          {
+            "source_label": "ActiveIngredient",
+            "source_name": "benzoyl_peroxide",
+            "relationship": "BELONGS_TO_CLASS",
+            "target_label": "DrugClass",
+            "target_name": "topical_antibiotic"
+          },
+          {
+            "source_label": "ActiveIngredient",
+            "source_name": "benzoyl_peroxide",
+            "relationship": "BELONGS_TO_CLASS",
+            "target_label": "DrugClass",
+            "target_name": "oral_antibiotic"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "differin_class",
+    "query": "Differin thuộc nhóm gì?",
+    "expected": {
+      "drug_product": ["Differin"],
+      "active_ingredient": ["adapalene"],
+      "drug_class": ["topical_retinoid"],
+      "entity_type_expected": "drug_product",
+      "required_graph_edges": [
+        {
+          "source_label": "DrugProduct",
+          "source_name": "Differin",
+          "relationship": "HAS_ACTIVE_INGREDIENT",
+          "target_label": "ActiveIngredient",
+          "target_name": "adapalene"
+        },
+        {
+          "source_label": "ActiveIngredient",
+          "source_name": "adapalene",
+          "relationship": "BELONGS_TO_CLASS",
+          "target_label": "DrugClass",
+          "target_name": "topical_retinoid"
+        }
+      ]
+    }
+  },
+  {
+    "id": "benzoyl_peroxide_not_antibiotic",
+    "query": "Benzoyl peroxide có phải kháng sinh không?",
+    "expected": {
+      "active_ingredient": ["benzoyl_peroxide"],
+      "drug_class": ["benzoyl_peroxide"],
+      "metadata": {
+        "not_antibiotic": true
+      },
+      "negative_expectations": {
+        "drug_class_absent": ["topical_antibiotic", "oral_antibiotic"],
+        "forbidden_graph_edges": [
+          {
+            "source_label": "ActiveIngredient",
+            "source_name": "benzoyl_peroxide",
+            "relationship": "BELONGS_TO_CLASS",
+            "target_label": "DrugClass",
+            "target_name": "topical_antibiotic"
+          },
+          {
+            "source_label": "ActiveIngredient",
+            "source_name": "benzoyl_peroxide",
+            "relationship": "BELONGS_TO_CLASS",
+            "target_label": "DrugClass",
+            "target_name": "oral_antibiotic"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "clindamycin_not_retinoid",
+    "query": "Clindamycin có phải retinoid không?",
+    "expected": {
+      "active_ingredient": ["clindamycin"],
+      "drug_class": ["topical_antibiotic"],
+      "negative_expectations": {
+        "drug_class_absent": ["topical_retinoid", "oral_retinoid"],
+        "forbidden_graph_edges": [
+          {
+            "source_label": "ActiveIngredient",
+            "source_name": "clindamycin",
+            "relationship": "BELONGS_TO_CLASS",
+            "target_label": "DrugClass",
+            "target_name": "topical_retinoid"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "adapalene_not_antibiotic",
+    "query": "Adapalene có phải kháng sinh không?",
+    "expected": {
+      "active_ingredient": ["adapalene"],
+      "drug_class": ["topical_retinoid"],
+      "negative_expectations": {
+        "drug_class_absent": ["topical_antibiotic", "oral_antibiotic"],
+        "forbidden_graph_edges": [
+          {
+            "source_label": "ActiveIngredient",
+            "source_name": "adapalene",
+            "relationship": "BELONGS_TO_CLASS",
+            "target_label": "DrugClass",
+            "target_name": "topical_antibiotic"
+          }
+        ]
+      }
+    }
+  }
+]

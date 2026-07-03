@@ -28,6 +28,7 @@ from src.ingestion.dermatology_taxonomy import (
 )
 from src.ingestion.domain_metadata import (
     DermatologyChunkMetadata,
+    enrich_domain_metadata,
     extract_dermatology_metadata,
 )
 
@@ -43,5 +44,6 @@ __all__ = [
     "VIETNAMESE_MAPPINGS",
     # Metadata extraction
     "DermatologyChunkMetadata",
+    "enrich_domain_metadata",
     "extract_dermatology_metadata",
 ]

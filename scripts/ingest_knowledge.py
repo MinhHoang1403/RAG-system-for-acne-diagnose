@@ -100,7 +100,13 @@ except ImportError:
     pass
 
 # Phase 1.5 — Dermatology-Aware Chunking
-from src.ingestion.domain_metadata import extract_dermatology_metadata
+from src.ingestion.cleanup import (
+    CLEANUP_VERSION,
+    build_qdrant_cleanup_plan,
+    cleanup_previous_qdrant_points,
+)
+from src.ingestion.domain_metadata import enrich_domain_metadata, extract_dermatology_metadata
+from src.knowledge.versioning import expected_kb_payload_metadata
 
 
 # =============================================================================
@@ -126,7 +132,7 @@ OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5")
 
 GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "models/gemini-embedding-001")
+EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "models/gemini-embedding-2")
 EMBEDDING_DIMENSIONS: int = int(os.getenv("EMBEDDING_DIMENSIONS", "3072"))
 
 QDRANT_URL: str = os.getenv("QDRANT_URL", "http://localhost:6333")
@@ -418,10 +424,34 @@ def _file_manifest_info(path: Path) -> dict[str, Any]:
     return {
         "path": path,
         "source_path": source_path,
+        "source_file": path.name,
         "document_id": document_id_from_source_path(source_path),
         "content_hash": compute_file_hash(path),
         "file_size": stat.st_size,
         "modified_time": _file_modified_time_iso(path),
+    }
+
+
+def _dedupe_manifest_point_ids(qdrant_point_ids: list[str] | None) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for raw_id in qdrant_point_ids or []:
+        point_id = str(raw_id).strip()
+        if not point_id or point_id in seen:
+            continue
+        seen.add(point_id)
+        deduped.append(point_id)
+    return deduped
+
+
+def _manifest_qdrant_metadata(qdrant_point_ids: list[str] | None) -> dict[str, Any]:
+    point_ids = _dedupe_manifest_point_ids(qdrant_point_ids)
+    return {
+        "qdrant_collection": QDRANT_COLLECTION_NAME,
+        "qdrant_point_ids": point_ids,
+        "qdrant_point_count": len(point_ids),
+        "cleanup_version": CLEANUP_VERSION,
+        **expected_kb_payload_metadata(),
     }
 
 
@@ -453,12 +483,13 @@ def get_incremental_file_plan(
         info["manifest_key"] = manifest_key
         info["previous_status"] = previous_status
         info["previous_content_hash"] = previous_hash
+        info["previous_manifest_record"] = previous
 
         if force_reingest:
             reason = "force"
         elif previous is None:
             reason = "new"
-        elif previous_status in {"failed", "partial"}:
+        elif previous_status in {"failed", "partial", "cleanup_failed"}:
             if previous_hash != info["content_hash"]:
                 reason = "changed"
             else:
@@ -471,6 +502,7 @@ def get_incremental_file_plan(
             reason = "retry"
 
         info["reason"] = reason
+        info["cleanup_required"] = reason in {"changed", "retry", "force"} and previous is not None
         scanned.append(info)
 
         if reason == "skip":
@@ -545,9 +577,10 @@ def update_manifest_before_ingest(
                 "modified_time",
             )
         },
+        "source_file": str(file_info.get("source_file") or Path(source_path).name),
         "status": "partial",
         "chunk_count": previous_chunk_count,
-        "qdrant_point_ids": previous_qdrant_ids,
+        **_manifest_qdrant_metadata(previous_qdrant_ids),
         "last_ingested_at": None,
         "ingestion_run_id": ingestion_run_id,
         "error_message": "ingestion started but has not completed",
@@ -572,15 +605,17 @@ def update_manifest_after_success(
     warning: str | None = None,
 ) -> None:
     documents = _manifest_documents(manifest)
+    qdrant_metadata = _manifest_qdrant_metadata(qdrant_point_ids)
     entry: dict[str, Any] = {
         "source_path": source_path,
+        "source_file": Path(source_path).name,
         "document_id": document_id,
         "content_hash": content_hash,
         "file_size": file_size,
         "modified_time": modified_time,
         "status": status,
         "chunk_count": chunk_count,
-        "qdrant_point_ids": qdrant_point_ids or [],
+        **qdrant_metadata,
         "last_ingested_at": last_ingested_at or utc_now_iso(),
         "ingestion_run_id": ingestion_run_id,
     }
@@ -627,16 +662,18 @@ def update_manifest_after_failure(
         if qdrant_point_ids is not None
         else previous_qdrant_ids
     )
+    qdrant_metadata = _manifest_qdrant_metadata(manifest_qdrant_point_ids)
 
     entry: dict[str, Any] = {
         "source_path": source_path,
+        "source_file": str(file_info.get("source_file") or Path(source_path).name),
         "document_id": str(file_info["document_id"]),
         "content_hash": str(file_info["content_hash"]),
         "file_size": int(file_info["file_size"]),
         "modified_time": str(file_info["modified_time"]),
         "status": status,
         "chunk_count": manifest_chunk_count,
-        "qdrant_point_ids": manifest_qdrant_point_ids,
+        **qdrant_metadata,
         "last_ingested_at": last_ingested_at or utc_now_iso(),
         "ingestion_run_id": ingestion_run_id,
         "error_message": _short_error_message(error),
@@ -666,6 +703,7 @@ def enrich_chunks_with_ingestion_metadata(
                 "modified_time": str(file_info["modified_time"]),
                 "ingestion_run_id": ingestion_run_id,
                 "ingested_at": ingested_at,
+                **expected_kb_payload_metadata(),
             }
         )
         chunk.metadata.update(
@@ -800,15 +838,6 @@ def warn_changed_document_cleanup(
     if file_info.get("reason") != "changed" or dry_run:
         return
 
-    if not skip_qdrant:
-        logger.warning(
-            "[INCREMENTAL] Changed file detected: %s. New vectors will be "
-            "upserted into Qdrant, but old Qdrant points may remain stale. "
-            "TODO: cleanup old points by document_id/source_path after "
-            "verifying Qdrant payload delete support for this client and collection.",
-            file_info["source_path"],
-        )
-
     if not skip_neo4j:
         logger.warning(
             "[INCREMENTAL] Changed file detected: %s. New graph facts will be "
@@ -817,6 +846,52 @@ def warn_changed_document_cleanup(
             "current nodes/edges are global clinical entities keyed by name.",
             file_info["source_path"],
         )
+
+
+async def cleanup_qdrant_before_reingest(
+    *,
+    manifest_record: dict[str, Any] | None,
+    file_info: dict[str, Any],
+    dry_run: bool,
+) -> dict[str, Any]:
+    if not file_info.get("cleanup_required"):
+        return {
+            "cleanup_required": False,
+            "safe": True,
+            "mode": "none",
+            "reason": "no previous Qdrant points expected for this file action",
+        }
+
+    if dry_run:
+        return build_qdrant_cleanup_plan(
+            collection_name=QDRANT_COLLECTION_NAME,
+            manifest_record=manifest_record,
+            expected_document_id=str(file_info["document_id"]),
+            expected_source_path=str(file_info["source_path"]),
+        )
+
+    try:
+        from qdrant_client import AsyncQdrantClient  # type: ignore
+    except ImportError as exc:
+        raise SystemExit("Missing dependency. Run: pip install qdrant-client") from exc
+
+    client = AsyncQdrantClient(**qdrant_client_kwargs())
+    try:
+        result = await cleanup_previous_qdrant_points(
+            qdrant_client=client,
+            collection_name=QDRANT_COLLECTION_NAME,
+            manifest_record=manifest_record,
+            expected_document_id=str(file_info["document_id"]),
+            expected_source_path=str(file_info["source_path"]),
+            dry_run=False,
+        )
+    finally:
+        await client.close()
+
+    if not result.get("safe", False):
+        raise RuntimeError(result.get("reason") or "Qdrant cleanup was blocked")
+
+    return result
 
 
 def clear_graph_cache_dir() -> int:
@@ -1356,7 +1431,10 @@ def _enrich_chunk_metadata(
     enriched["metadata_confidence"] = derm_meta["confidence"]
     enriched["metadata_extraction_method"] = derm_meta["extraction_method"]
 
-    return enriched
+    return enrich_domain_metadata(
+        text=f"{header_path}\n{text}" if header_path else text,
+        existing_metadata=enriched,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2423,6 +2501,7 @@ async def stage4b_upsert_qdrant(
 
                 payload = {
                     **chunk.metadata,
+                    **expected_kb_payload_metadata(),
                     "document_id": document_id,
                     "source_path": source_path,
                     "content_hash": document_content_hash,
@@ -2756,6 +2835,19 @@ async def ingest_pipeline_incremental(
             qdrant_point_ids: list[str] = []
 
             if dry_run:
+                if file_info.get("cleanup_required") and not skip_qdrant:
+                    cleanup_plan = await cleanup_qdrant_before_reingest(
+                        manifest_record=file_info.get("previous_manifest_record"),
+                        file_info=file_info,
+                        dry_run=True,
+                    )
+                    logger.info(
+                        "[DRY RUN] Qdrant cleanup plan for %s: mode=%s safe=%s reason=%s",
+                        file_info["source_path"],
+                        cleanup_plan.get("mode"),
+                        cleanup_plan.get("safe"),
+                        cleanup_plan.get("reason"),
+                    )
                 logger.info("[DRY RUN] Stage 4A/4B writes and manifest update skipped.")
                 continue
 
@@ -2763,6 +2855,38 @@ async def ingest_pipeline_incremental(
                 logger.info("=" * 60)
                 logger.info("[STAGE 4B] Qdrant Vector Indexing (dense + hashed sparse)")
                 logger.info("=" * 60)
+
+                try:
+                    cleanup_result = await cleanup_qdrant_before_reingest(
+                        manifest_record=file_info.get("previous_manifest_record"),
+                        file_info=file_info,
+                        dry_run=False,
+                    )
+                    if cleanup_result.get("cleanup_required"):
+                        logger.info(
+                            "[QDRANT CLEANUP] Completed before re-ingest for %s: "
+                            "mode=%s deleted=%s",
+                            file_info["source_path"],
+                            cleanup_result.get("mode"),
+                            cleanup_result.get("deleted"),
+                        )
+                except Exception as cleanup_exc:
+                    update_manifest_after_failure(
+                        manifest=manifest,
+                        file_info=file_info,
+                        ingestion_run_id=ingestion_run_id,
+                        error=f"Qdrant cleanup failed: {cleanup_exc}",
+                        status="cleanup_failed",
+                        chunk_count=len(chunks),
+                        last_ingested_at=ingested_at,
+                    )
+                    save_ingestion_manifest(manifest_path, manifest)
+                    logger.error(
+                        "[QDRANT CLEANUP] Failed for %s. Upsert skipped to avoid duplicates: %s",
+                        file_info["source_path"],
+                        cleanup_exc,
+                    )
+                    continue
 
                 vectors = await stage4b_upsert_qdrant(
                     chunks,
