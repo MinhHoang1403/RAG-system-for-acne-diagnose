@@ -123,8 +123,8 @@ Entry point:
 
 Luồng chính:
 
-1. Tìm `*.pdf` và `*.docx` trong `SAMPLE_DATA_DIR` hoặc `--source`.
-2. Parse tài liệu bằng LlamaParse sang Markdown.
+1. Tìm `*.pdf`, `*.docx` và `*.json` trong `SAMPLE_DATA_DIR` hoặc `--source`.
+2. Parse PDF/DOCX bằng LlamaParse sang Markdown; JSON web dataset được đọc local.
 3. Cache Markdown trong `data/cache/markdown`.
 4. Chunk Markdown theo header và `CHUNK_SIZE`.
 5. Trích xuất graph bằng Ollama.
@@ -132,6 +132,13 @@ Luồng chính:
 7. Upsert graph vào Neo4j.
 8. Embed chunks bằng Gemini.
 9. Upsert Qdrant với `dense` và `bm25`.
+
+Supported knowledge file types:
+- PDF/DOCX: dùng pipeline LlamaParse hiện tại.
+- JSON web dataset: file như `web_raw_dataset.json` chứa list records hoặc wrapper `records/data/items/documents/pages`, mỗi record có `seed_url`, `source_url`, `raw_text`.
+- JSON được xử lý local, không dùng LlamaParse.
+- JSON chunks preserve `source_url`, `seed_url`, `record_index`, `source_type=web_json` trong payload metadata.
+- Đặt `web_raw_dataset.json` vào `sample_data/` trước clean rebuild nếu muốn ingest chung với PDF/DOCX.
 
 Incremental ingestion dùng manifest mặc định `data/ingestion_manifest.json`.
 Tài liệu có `status=completed` hoặc `status=completed_with_warnings` sẽ được skip khi `content_hash` không đổi.

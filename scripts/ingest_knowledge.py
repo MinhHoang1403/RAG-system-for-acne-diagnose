@@ -106,6 +106,7 @@ from src.ingestion.cleanup import (
     cleanup_previous_qdrant_points,
 )
 from src.ingestion.domain_metadata import enrich_domain_metadata, extract_dermatology_metadata
+from src.ingestion.json_loader import load_web_json_documents_with_stats
 from src.knowledge.versioning import expected_kb_payload_metadata
 
 
@@ -306,10 +307,18 @@ def discover_source_documents(source_dir: Path) -> list[Path]:
         return []
 
     files: list[Path] = []
-    for pattern in ("*.pdf", "*.docx"):
+    for pattern in ("*.pdf", "*.docx", "*.json"):
         files.extend(source_dir.rglob(pattern))
 
     return sorted(files)
+
+
+def discover_knowledge_files(source_dir: Path) -> list[Path]:
+    return discover_source_documents(source_dir)
+
+
+def is_web_json_source(path: Path) -> bool:
+    return path.suffix.lower() == ".json"
 
 
 # =============================================================================
@@ -338,6 +347,16 @@ def _source_path_key(path: Path) -> str:
 
 def document_id_from_source_path(source_path: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"acne-advisor-ai:{source_path}"))
+
+
+def web_json_record_document_id(
+    source_path: str,
+    record_index: int,
+    source_url: str | None = None,
+) -> str:
+    identity = (source_url or "").strip() or f"record:{record_index}"
+    key = f"acne-advisor-ai:web_json:{source_path}:{identity}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
 
 
 def _file_modified_time_iso(path: Path) -> str:
@@ -425,6 +444,7 @@ def _file_manifest_info(path: Path) -> dict[str, Any]:
         "path": path,
         "source_path": source_path,
         "source_file": path.name,
+        "source_type": "web_json" if is_web_json_source(path) else "source_document",
         "document_id": document_id_from_source_path(source_path),
         "content_hash": compute_file_hash(path),
         "file_size": stat.st_size,
@@ -453,6 +473,23 @@ def _manifest_qdrant_metadata(qdrant_point_ids: list[str] | None) -> dict[str, A
         "cleanup_version": CLEANUP_VERSION,
         **expected_kb_payload_metadata(),
     }
+
+
+def _manifest_source_metadata(source_metadata: dict[str, Any] | None) -> dict[str, Any]:
+    if not source_metadata:
+        return {}
+
+    fields = (
+        "source_type",
+        "document_count",
+        "json_record_count",
+        "skipped_record_count",
+    )
+    output: dict[str, Any] = {}
+    for field_name in fields:
+        if field_name in source_metadata:
+            output[field_name] = source_metadata[field_name]
+    return output
 
 
 def get_incremental_file_plan(
@@ -578,6 +615,7 @@ def update_manifest_before_ingest(
             )
         },
         "source_file": str(file_info.get("source_file") or Path(source_path).name),
+        **_manifest_source_metadata(file_info),
         "status": "partial",
         "chunk_count": previous_chunk_count,
         **_manifest_qdrant_metadata(previous_qdrant_ids),
@@ -603,12 +641,14 @@ def update_manifest_after_success(
     graph_error_count: int | None = None,
     graph_error_tolerance: float | None = None,
     warning: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
 ) -> None:
     documents = _manifest_documents(manifest)
     qdrant_metadata = _manifest_qdrant_metadata(qdrant_point_ids)
     entry: dict[str, Any] = {
         "source_path": source_path,
         "source_file": Path(source_path).name,
+        **_manifest_source_metadata(source_metadata),
         "document_id": document_id,
         "content_hash": content_hash,
         "file_size": file_size,
@@ -667,6 +707,7 @@ def update_manifest_after_failure(
     entry: dict[str, Any] = {
         "source_path": source_path,
         "source_file": str(file_info.get("source_file") or Path(source_path).name),
+        **_manifest_source_metadata(file_info),
         "document_id": str(file_info["document_id"]),
         "content_hash": str(file_info["content_hash"]),
         "file_size": int(file_info["file_size"]),
@@ -694,9 +735,14 @@ def enrich_chunks_with_ingestion_metadata(
     ingested_at: str,
 ) -> None:
     for chunk in chunks:
+        document_id = str(chunk.metadata.get("document_id") or file_info["document_id"])
+        source_type = str(chunk.metadata.get("source_type") or file_info.get("source_type") or "")
         chunk.metadata.update(
             {
-                "document_id": str(file_info["document_id"]),
+                "document_id": document_id,
+                "file_document_id": str(file_info["document_id"]),
+                "source_type": source_type,
+                "source_file": str(file_info.get("source_file") or chunk.source_file),
                 "source_path": str(file_info["source_path"]),
                 "content_hash": str(file_info["content_hash"]),
                 "file_size": int(file_info["file_size"]),
@@ -826,6 +872,7 @@ def finalize_manifest_for_documents(
             graph_error_count=graph_errors,
             graph_error_tolerance=graph_tolerance,
             warning=graph_warning,
+            source_metadata=file_info,
         )
 
 
@@ -1389,6 +1436,59 @@ async def stage1_extract_pdfs(
     return results
 
 
+async def stage1_extract_sources(
+    source_dir: Path,
+    limit_files: int | None = None,
+    refresh_markdown: bool = False,
+    stats: IngestionStats | None = None,
+) -> list[tuple[dict[str, Any], str, str | None]]:
+    source_files = discover_source_documents(source_dir)
+
+    if limit_files is not None and limit_files > 0:
+        source_files = source_files[:limit_files]
+
+    if not source_files:
+        logger.warning("[STAGE 1] No PDF/DOCX/JSON files found in %s", source_dir)
+        return []
+
+    json_count = sum(1 for path in source_files if is_web_json_source(path))
+    parsed_count = len(source_files) - json_count
+    logger.info(
+        "[STAGE 1] Found %d knowledge file(s) in %s: parseable=%d json=%d",
+        len(source_files),
+        source_dir,
+        parsed_count,
+        json_count,
+    )
+
+    parser = None
+    results: list[tuple[dict[str, Any], str, str | None]] = []
+    for source_path in source_files:
+        file_info = _file_manifest_info(source_path)
+        if is_web_json_source(source_path):
+            logger.info("[STAGE 1] Found JSON file: %s", source_path.name)
+            results.append((file_info, source_path.name, None))
+            continue
+
+        if parser is None:
+            parser = build_llamaparse_parser()
+        parsed = await stage1_extract_one_source(
+            source_path=source_path,
+            parser=parser,
+            refresh_markdown=refresh_markdown,
+            stats=stats,
+        )
+        if parsed is not None:
+            results.append((file_info, parsed[0], parsed[1]))
+
+    logger.info(
+        "[STAGE 1] Completed: %d/%d source file(s) available",
+        len(results),
+        len(source_files),
+    )
+    return results
+
+
 # =============================================================================
 # STAGE 2 – Markdown chunking
 # =============================================================================
@@ -1627,6 +1727,63 @@ def chunk_markdown_text(
             idx += 1
             child_index += 1
 
+    return chunks
+
+
+def stage2_chunk_web_json_file(
+    source_path: Path,
+    file_info: dict[str, Any],
+) -> list[SemanticChunk]:
+    documents, summary = load_web_json_documents_with_stats(source_path)
+    file_info["json_record_count"] = summary["total_records"]
+    file_info["document_count"] = len(documents)
+    file_info["skipped_record_count"] = summary["skipped_records"]
+
+    logger.info(
+        "[STAGE 1] Loaded %d JSON documents from %s; skipped=%d",
+        len(documents),
+        source_path.name,
+        summary["skipped_records"],
+    )
+
+    chunks: list[SemanticChunk] = []
+    for document in documents:
+        text = str(document["text"])
+        metadata = dict(document["metadata"])
+        record_index = int(metadata.get("record_index", 0) or 0)
+        record_document_id = web_json_record_document_id(
+            source_path=str(file_info["source_path"]),
+            record_index=record_index,
+            source_url=str(metadata.get("source_url") or ""),
+        )
+
+        record_chunks = chunk_markdown_text(
+            markdown_text=text,
+            source_file=str(file_info.get("source_file") or source_path.name),
+            max_section_chars=CHUNK_SIZE,
+        )
+
+        for chunk in record_chunks:
+            chunk.metadata.update(
+                {
+                    **metadata,
+                    "source_type": "web_json",
+                    "source_file": str(file_info.get("source_file") or source_path.name),
+                    "source_path": str(file_info["source_path"]),
+                    "record_index": record_index,
+                    "document_id": record_document_id,
+                    "file_document_id": str(file_info["document_id"]),
+                }
+            )
+            chunk.metadata = enrich_domain_metadata(
+                text=chunk.text,
+                existing_metadata=chunk.metadata,
+            )
+            chunk.metadata["chunk_index"] = chunk.chunk_index
+            chunk.metadata["chunk_id"] = chunk.chunk_id
+            chunks.append(chunk)
+
+    logger.info("[STAGE 2] %s -> %d JSON semantic chunks", source_path.name, len(chunks))
     return chunks
 
 
@@ -2716,7 +2873,7 @@ async def ingest_pipeline_incremental(
         source_files = source_files[:limit_files]
 
     if not source_files:
-        logger.warning("[INCREMENTAL] No PDF/DOCX files found in %s", source_dir)
+        logger.warning("[INCREMENTAL] No PDF/DOCX/JSON files found in %s", source_dir)
         return stats
 
     manifest = load_ingestion_manifest(manifest_path)
@@ -2735,7 +2892,7 @@ async def ingest_pipeline_incremental(
     logger.info("[INCREMENTAL] Ingestion run id: %s", ingestion_run_id)
     logger.info("[INCREMENTAL] Manifest path: %s", manifest_path)
 
-    parser = build_llamaparse_parser()
+    parser = None
     remaining_chunks = limit_chunks if limit_chunks is not None and limit_chunks > 0 else None
 
     for doc_number, file_info in enumerate(plan["to_ingest"], start=1):
@@ -2770,24 +2927,29 @@ async def ingest_pipeline_incremental(
         stage1_already_recorded_error = False
 
         try:
-            parsed = await stage1_extract_one_source(
-                source_path=file_info["path"],
-                parser=parser,
-                refresh_markdown=refresh_markdown,
-                stats=stats,
-            )
-            if parsed is None:
-                stage1_already_recorded_error = True
-                raise RuntimeError("Stage 1 extraction failed")
-
-            stats.pdf_files += 1
-            filename, markdown = parsed
-
             logger.info("=" * 60)
             logger.info("[STAGE 2] Markdown-Aware Chunking (chunk_size=%d)", CHUNK_SIZE)
             logger.info("=" * 60)
 
-            chunks = stage2_chunk_markdown(filename, markdown)
+            if is_web_json_source(file_info["path"]):
+                logger.info("[STAGE 1] Found JSON file: %s", file_info["path"].name)
+                chunks = stage2_chunk_web_json_file(file_info["path"], file_info)
+            else:
+                if parser is None:
+                    parser = build_llamaparse_parser()
+                parsed = await stage1_extract_one_source(
+                    source_path=file_info["path"],
+                    parser=parser,
+                    refresh_markdown=refresh_markdown,
+                    stats=stats,
+                )
+                if parsed is None:
+                    stage1_already_recorded_error = True
+                    raise RuntimeError("Stage 1 extraction failed")
+                filename, markdown = parsed
+                chunks = stage2_chunk_markdown(filename, markdown)
+
+            stats.pdf_files += 1
             original_chunk_count = len(chunks)
             limit_chunks_used_for_doc = remaining_chunks is not None
             truncated_by_limit = False
@@ -2968,6 +3130,7 @@ async def ingest_pipeline_incremental(
                 graph_error_count=graph_errors,
                 graph_error_tolerance=graph_tolerance,
                 warning=graph_warning,
+                source_metadata=file_info,
             )
             save_ingestion_manifest(manifest_path, manifest)
             logger.info(
@@ -3035,10 +3198,10 @@ async def ingest_pipeline(
     ingested_at = utc_now_iso()
 
     logger.info("=" * 60)
-    logger.info("[STAGE 1] PDF Extraction via LlamaParse")
+    logger.info("[STAGE 1] Source Extraction via LlamaParse + local JSON loader")
     logger.info("=" * 60)
 
-    parsed_docs = await stage1_extract_pdfs(
+    parsed_docs = await stage1_extract_sources(
         source_dir=source_dir,
         limit_files=limit_files,
         refresh_markdown=refresh_markdown,
@@ -3058,7 +3221,10 @@ async def ingest_pipeline(
     doc_chunks: list[tuple[dict[str, Any], list[SemanticChunk]]] = []
 
     for file_info, filename, markdown in parsed_docs:
-        chunks = stage2_chunk_markdown(filename, markdown)
+        if is_web_json_source(file_info["path"]):
+            chunks = stage2_chunk_web_json_file(file_info["path"], file_info)
+        else:
+            chunks = stage2_chunk_markdown(filename, markdown or "")
         enrich_chunks_with_ingestion_metadata(
             chunks=chunks,
             file_info=file_info,
