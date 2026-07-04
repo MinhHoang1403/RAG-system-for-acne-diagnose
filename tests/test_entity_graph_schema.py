@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from scripts.build_entity_graph import build_dry_run_summary
 from src.knowledge.entity_cards import build_entity_cards_from_taxonomy
+from src.knowledge.graph_index import sanitize_neo4j_properties
 from src.knowledge.graph_schema import (
     build_entity_graph_records,
     get_entity_graph_constraints,
@@ -150,3 +151,53 @@ def test_dry_run_build_entity_graph_no_neo4j_required() -> None:
     assert "HAS_ACTIVE_INGREDIENT" in summary["relationships_by_type"]
     preview_names = {node["canonical_name"] for node in summary["preview"]["nodes"]}
     assert {"Dalacin T", "Epiduo", "Differin", "benzoyl_peroxide"}.issubset(preview_names)
+
+
+def test_sanitize_neo4j_properties_flattens_nested_maps() -> None:
+    node = next(
+        node
+        for node in _records()["nodes"]
+        if node["label"] == "DrugProduct" and node["canonical_name"] == "Differin"
+    )
+
+    sanitized = sanitize_neo4j_properties(
+        {key: value for key, value in node.items() if key != "label"}
+    )
+
+    for required_field in (
+        "entity_id",
+        "canonical_name",
+        "entity_type",
+        "aliases",
+        "taxonomy_version",
+        "entity_schema_version",
+        "kb_version",
+        "source_ids",
+    ):
+        assert required_field in sanitized
+
+    assert "metadata" not in sanitized
+    assert "metadata_json" in sanitized
+    assert '"taxonomy_key": "differin"' in sanitized["metadata_json"]
+
+    for value in sanitized.values():
+        assert not isinstance(value, dict)
+        if isinstance(value, list):
+            assert all(isinstance(item, (str, int, float, bool)) for item in value)
+
+
+def test_sanitize_neo4j_properties_serializes_complex_relationship_property() -> None:
+    sanitized = sanitize_neo4j_properties(
+        {
+            "source": "taxonomy",
+            "confidence": 1.0,
+            "nested": {"a": ["b"]},
+            "none_value": None,
+        }
+    )
+
+    assert sanitized["source"] == "taxonomy"
+    assert sanitized["confidence"] == 1.0
+    assert sanitized["nested_json"] == '{"a": ["b"]}'
+    assert "none_value" not in sanitized
+    assert "nested" not in sanitized

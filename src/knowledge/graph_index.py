@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any
@@ -19,6 +20,8 @@ logger = logging.getLogger(__name__)
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+
+PrimitiveNeo4jValue = str | int | float | bool
 
 
 def get_neo4j_driver() -> Any:
@@ -54,21 +57,18 @@ async def upsert_entity_graph(driver: Any, records: dict[str, list[dict[str, Any
     async with driver.session() as session:
         for node in records.get("nodes", []):
             label = _safe_label(node["label"])
+            properties = sanitize_neo4j_properties(
+                {key: value for key, value in node.items() if key != "label"}
+            )
             await session.run(
                 (
                     f"MERGE (n:{label} {{canonical_name: $canonical_name}}) "
                     "ON CREATE SET n.created_at = datetime() "
-                    "SET n.entity_type = $entity_type, "
-                    "n.aliases = $aliases, "
-                    "n.entity_id = $entity_id, "
-                    "n.taxonomy_version = $taxonomy_version, "
-                    "n.entity_schema_version = $entity_schema_version, "
-                    "n.kb_version = $kb_version, "
-                    "n.source_ids = $source_ids, "
-                    "n.metadata = $metadata, "
+                    "SET n += $properties, "
                     "n.updated_at = datetime()"
                 ),
-                **node,
+                canonical_name=node["canonical_name"],
+                properties=properties,
             )
             node_count += 1
 
@@ -76,27 +76,21 @@ async def upsert_entity_graph(driver: Any, records: dict[str, list[dict[str, Any
             source_label = _safe_label(relationship["source_label"])
             target_label = _safe_label(relationship["target_label"])
             rel_type = _safe_relationship(relationship["relationship"])
-            properties = dict(relationship.get("properties") or {})
+            properties = sanitize_neo4j_properties(
+                dict(relationship.get("properties") or {})
+            )
             await session.run(
                 (
                     f"MATCH (src:{source_label} {{canonical_name: $source_name}}) "
                     f"MATCH (tgt:{target_label} {{canonical_name: $target_name}}) "
                     f"MERGE (src)-[r:{rel_type}]->(tgt) "
                     "ON CREATE SET r.created_at = datetime() "
-                    "SET r.kb_version = $kb_version, "
-                    "r.taxonomy_version = $taxonomy_version, "
-                    "r.source = $source, "
-                    "r.confidence = $confidence, "
-                    "r.created_by = $created_by, "
+                    "SET r += $properties, "
                     "r.updated_at = datetime()"
                 ),
                 source_name=relationship["source_name"],
                 target_name=relationship["target_name"],
-                kb_version=properties.get("kb_version"),
-                taxonomy_version=properties.get("taxonomy_version"),
-                source=properties.get("source"),
-                confidence=properties.get("confidence"),
-                created_by=properties.get("created_by"),
+                properties=properties,
             )
             relationship_count += 1
 
@@ -176,6 +170,43 @@ async def validate_entity_graph(driver: Any) -> dict[str, Any]:
     return results
 
 
+def sanitize_neo4j_properties(properties: dict[str, Any]) -> dict[str, Any]:
+    """Return Neo4j-safe flat properties.
+
+    Neo4j properties may only be primitive values or arrays of primitive values.
+    Nested maps/lists are preserved as deterministic JSON strings using a
+    ``*_json`` property, e.g. ``metadata`` becomes ``metadata_json``.
+    """
+
+    sanitized: dict[str, Any] = {}
+    for key, value in properties.items():
+        if value is None:
+            continue
+
+        if _is_primitive_neo4j_value(value):
+            sanitized[key] = value
+            continue
+
+        if isinstance(value, list) and all(
+            _is_primitive_neo4j_value(item) for item in value
+        ):
+            sanitized[key] = value
+            continue
+
+        sanitized[f"{key}_json"] = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+
+    return sanitized
+
+
+def _is_primitive_neo4j_value(value: Any) -> bool:
+    return isinstance(value, (str, int, float, bool))
+
+
 def _safe_label(label: str) -> str:
     if label not in ENTITY_GRAPH_LABELS:
         raise ValueError(f"Unsupported entity graph label: {label}")
@@ -191,6 +222,7 @@ def _safe_relationship(relationship: str) -> str:
 __all__ = [
     "apply_entity_graph_schema",
     "get_neo4j_driver",
+    "sanitize_neo4j_properties",
     "upsert_entity_graph",
     "validate_entity_graph",
 ]
