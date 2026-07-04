@@ -330,16 +330,25 @@ Script validate chỉ đọc Qdrant: kiểm tra collection tồn tại, dense `d
 
 Khi cần rebuild sạch toàn bộ KB sau Pha 1, hãy dừng API trước và backup dữ liệu nếu cần. Sau đó developer có thể reset Docker volumes/data theo quy trình riêng của môi trường, rồi chạy lại theo thứ tự:
 
-1. Start backing services bằng Docker Compose.
-2. Chạy `scripts/init_schema.py`.
-3. Ingest chunk collection với `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS` hiện tại.
-4. Build entity index bằng cùng embedding config.
-5. Dry-run deterministic entity graph bằng `scripts/build_entity_graph.py --dry-run`.
-6. Apply schema + upsert entity graph bằng `scripts/build_entity_graph.py --apply-schema --upsert --validate`.
-7. Validate bằng `scripts/validate_kb_collections.py --strict true`.
-8. Chỉ chuyển Phase 2 retrieval sang collection mới sau khi validate pass.
+```powershell
+docker compose up -d
+.\venv\Scripts\python.exe scripts\init_schema.py
+.\venv\Scripts\python.exe scripts\init_chat_schema.py
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --skip-graph-extraction --skip-neo4j
+.\venv\Scripts\python.exe scripts\inspect_ingestion_manifest.py --show-missing
+.\venv\Scripts\python.exe scripts\build_entity_index.py --dry-run
+.\venv\Scripts\python.exe scripts\build_entity_index.py --no-dry-run --collection acne_entities_v1
+.\venv\Scripts\python.exe scripts\build_entity_graph.py --dry-run
+.\venv\Scripts\python.exe scripts\build_entity_graph.py --apply-schema --upsert --validate
+.\venv\Scripts\python.exe scripts\validate_kb_collections.py --chunk-collection acne_knowledge --entity-collection acne_entities_v1 --strict true
+.\venv\Scripts\python.exe scripts\validate_phase1_complete.py
+.\venv\Scripts\python.exe scripts\eval_phase1_readiness.py --verbose
+.\venv\Scripts\python.exe -m pytest tests -q --no-cov
+```
 
-Trong giai đoạn chuyển tiếp, `QDRANT_COLLECTION_NAME=acne_knowledge` vẫn là runtime hiện tại. `CHUNK_QDRANT_COLLECTION_NAME=acne_chunks_v1` là tên target cho clean rebuild tương lai; chỉ chuyển runtime sang collection này khi Phase 2 retrieval đã hỗ trợ.
+Legacy LLM graph extraction trong `scripts/ingest_knowledge.py` là optional và rất chậm; deterministic entity graph bằng `scripts/build_entity_graph.py` là lớp Phase 1 cần validate cho entity/drug graph hiện tại.
+
+Runtime chunk collection hiện tại là `acne_knowledge`. Giữ `QDRANT_COLLECTION_NAME=acne_knowledge` và `CHUNK_QDRANT_COLLECTION_NAME=acne_knowledge`; nếu môi trường cũ còn `CHUNK_QDRANT_COLLECTION_NAME=acne_chunks_v1`, validation/runtime sẽ fallback về `QDRANT_COLLECTION_NAME`.
 
 ## Chạy Ingestion
 
@@ -461,7 +470,7 @@ Invoke-RestMethod `
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant |
 | `QDRANT_API_KEY` | để trống nếu local | API key cho Qdrant Cloud/secured Qdrant |
 | `QDRANT_COLLECTION_NAME` | `acne_knowledge` | Collection chính |
-| `CHUNK_QDRANT_COLLECTION_NAME` | `acne_chunks_v1` | Tên collection chunk mục tiêu tương lai, không đổi runtime hiện tại |
+| `CHUNK_QDRANT_COLLECTION_NAME` | `acne_knowledge` | Collection chunk Phase 1 hiện tại; legacy `acne_chunks_v1` fallback về `QDRANT_COLLECTION_NAME` |
 | `ENTITY_QDRANT_COLLECTION_NAME` | `acne_entities_v1` | Collection entity cards riêng |
 | `NEO4J_URI` | `bolt://localhost:7687` | Neo4j |
 | `NEO4J_USERNAME` | `neo4j` | Neo4j user |

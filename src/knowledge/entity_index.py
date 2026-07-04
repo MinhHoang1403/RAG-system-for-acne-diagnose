@@ -33,10 +33,12 @@ def get_entity_collection_name() -> str:
 
 
 def get_chunk_collection_name() -> str:
-    return os.getenv(
-        "CHUNK_QDRANT_COLLECTION_NAME",
-        os.getenv("QDRANT_COLLECTION_NAME", CHUNK_COLLECTION_DEFAULT),
-    )
+    qdrant_collection = os.getenv("QDRANT_COLLECTION_NAME", CHUNK_COLLECTION_DEFAULT).strip()
+    qdrant_collection = qdrant_collection or CHUNK_COLLECTION_DEFAULT
+    configured = os.getenv("CHUNK_QDRANT_COLLECTION_NAME", "").strip()
+    if not configured or configured == CHUNK_COLLECTION_FUTURE_DEFAULT:
+        return qdrant_collection
+    return configured
 
 
 def entity_point_id(card: EntityCard, kb_version: str = "acne_kb_v1") -> str:

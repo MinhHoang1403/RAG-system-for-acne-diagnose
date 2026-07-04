@@ -133,13 +133,14 @@ def test_compatibility_guard_passes_for_same_config() -> None:
 
 
 def test_validate_script_parse_args_without_qdrant(monkeypatch) -> None:
+    monkeypatch.setenv("QDRANT_COLLECTION_NAME", "acne_knowledge")
     monkeypatch.setenv("CHUNK_QDRANT_COLLECTION_NAME", "acne_chunks_v1")
     monkeypatch.setenv("ENTITY_QDRANT_COLLECTION_NAME", "acne_entities_v1")
 
     args = parse_args([])
 
     assert isinstance(args, argparse.Namespace)
-    assert args.chunk_collection == "acne_chunks_v1"
+    assert args.chunk_collection == "acne_knowledge"
     assert args.entity_collection == "acne_entities_v1"
     assert args.sample_size == 5
     assert args.strict == "false"

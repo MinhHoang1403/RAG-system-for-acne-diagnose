@@ -23,7 +23,11 @@ except ImportError:
     pass
 
 from src.database.vector_store import qdrant_client_kwargs  # noqa: E402
-from src.knowledge.entity_index import get_entity_collection_name  # noqa: E402
+from src.knowledge.entity_index import (  # noqa: E402
+    CHUNK_COLLECTION_FUTURE_DEFAULT,
+    get_chunk_collection_name,
+    get_entity_collection_name,
+)
 from src.knowledge.versioning import (  # noqa: E402
     get_embedding_metadata,
     validate_embedding_config_compatibility,
@@ -45,10 +49,7 @@ ENTITY_REQUIRED_PAYLOAD_FIELDS = (
 
 
 def get_default_chunk_collection_name() -> str:
-    return os.getenv(
-        "CHUNK_QDRANT_COLLECTION_NAME",
-        os.getenv("QDRANT_COLLECTION_NAME", "acne_knowledge"),
-    )
+    return get_chunk_collection_name()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -58,7 +59,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--chunk-collection",
         default=get_default_chunk_collection_name(),
-        help="Chunk collection name. Defaults to CHUNK_QDRANT_COLLECTION_NAME, then QDRANT_COLLECTION_NAME.",
+        help=(
+            "Chunk collection name. Defaults to QDRANT_COLLECTION_NAME when "
+            f"CHUNK_QDRANT_COLLECTION_NAME is unset or legacy {CHUNK_COLLECTION_FUTURE_DEFAULT!r}."
+        ),
     )
     parser.add_argument(
         "--entity-collection",

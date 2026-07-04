@@ -484,6 +484,9 @@ def _manifest_source_metadata(source_metadata: dict[str, Any] | None) -> dict[st
         "document_count",
         "json_record_count",
         "skipped_record_count",
+        "graph_extraction_skipped",
+        "neo4j_skipped",
+        "qdrant_indexed",
     )
     output: dict[str, Any] = {}
     for field_name in fields:
@@ -533,7 +536,11 @@ def get_incremental_file_plan(
                 reason = "retry"
         elif previous_hash != info["content_hash"]:
             reason = "changed"
-        elif previous_status in {"completed", "completed_with_warnings"}:
+        elif previous_status in {
+            "completed",
+            "completed_with_warnings",
+            "completed_with_graph_skipped",
+        }:
             reason = "skip"
         else:
             reason = "retry"
@@ -791,6 +798,7 @@ def finalize_manifest_for_documents(
     ingested_at: str,
     skip_neo4j: bool,
     skip_qdrant: bool,
+    skip_graph_extraction: bool,
     qdrant_ids_available: bool,
     limit_chunks_truncated: bool,
     global_error: str | None = None,
@@ -798,12 +806,23 @@ def finalize_manifest_for_documents(
     payloads_by_chunk_id = {payload.chunk_id: payload for payload in payloads}
 
     for file_info, chunks in doc_chunks:
+        intentional_graph_skip = (
+            skip_graph_extraction
+            and skip_neo4j
+            and not skip_qdrant
+            and qdrant_ids_available
+            and bool(chunks)
+        )
+        file_info["graph_extraction_skipped"] = bool(skip_graph_extraction)
+        file_info["neo4j_skipped"] = bool(skip_neo4j)
+        file_info["qdrant_indexed"] = bool(qdrant_ids_available)
+
         reasons: list[str] = []
         if not chunks:
             reasons.append("no chunks processed")
         if limit_chunks_truncated:
             reasons.append("--limit-chunks used")
-        if skip_neo4j:
+        if skip_neo4j and not intentional_graph_skip:
             reasons.append("skipped Neo4j")
         if skip_qdrant:
             reasons.append("skipped Qdrant")
@@ -847,7 +866,7 @@ def finalize_manifest_for_documents(
                 file_info=file_info,
                 ingestion_run_id=ingestion_run_id,
                 error="; ".join(reasons),
-                status="partial",
+            status="partial",
                 chunk_count=len(chunks),
                 qdrant_point_ids=qdrant_point_ids,
                 last_ingested_at=ingested_at,
@@ -867,7 +886,11 @@ def finalize_manifest_for_documents(
             qdrant_point_ids=qdrant_point_ids,
             ingestion_run_id=ingestion_run_id,
             last_ingested_at=ingested_at,
-            status="completed_with_warnings" if graph_warning else "completed",
+            status=(
+                "completed_with_graph_skipped"
+                if intentional_graph_skip
+                else "completed_with_warnings" if graph_warning else "completed"
+            ),
             error_message=graph_warning,
             graph_error_count=graph_errors,
             graph_error_tolerance=graph_tolerance,
@@ -1961,11 +1984,7 @@ async def extract_graph_one_chunk(
         stats.graph_cache_misses += 1
 
     if skip_graph_extraction:
-        logger.warning(
-            "[STAGE 3] Graph extraction skipped and no cache found for chunk %s",
-            chunk.chunk_id,
-        )
-        return GraphPayload(chunk_id=chunk.chunk_id, extraction_error=True)
+        return GraphPayload(chunk_id=chunk.chunk_id, extraction_error=False)
 
     async with semaphore:
         try:
@@ -2766,6 +2785,7 @@ async def stage3_and_optional_neo4j_incremental(
 
     try:
         batches = chunk_list(chunks, GRAPH_BATCH_SIZE)
+        skip_graph_cache_misses_before = stats.graph_cache_misses
 
         for batch_idx, batch in enumerate(batches, start=1):
             logger.info(
@@ -2820,7 +2840,15 @@ async def stage3_and_optional_neo4j_incremental(
                     len(batches),
                     n_nodes,
                     n_edges,
-                )
+            )
+
+        if skip_graph_extraction:
+            cache_misses_due_to_skip = stats.graph_cache_misses - skip_graph_cache_misses_before
+            logger.info(
+                "[STAGE 3] Graph extraction skipped by flag — chunks=%d, cache_misses=%d",
+                len(chunks),
+                cache_misses_due_to_skip,
+            )
 
         logger.info(
             "[STAGE 3] ✓ Extraction complete — %d nodes, %d edges across %d chunks",
@@ -3062,7 +3090,17 @@ async def ingest_pipeline_incremental(
                 logger.warning("[STAGE 4B] Skipped by --skip-qdrant")
 
             skipped_components = []
-            if skip_neo4j:
+            intentional_graph_skip = (
+                skip_graph_extraction
+                and skip_neo4j
+                and not skip_qdrant
+                and bool(qdrant_point_ids)
+            )
+            file_info["graph_extraction_skipped"] = bool(skip_graph_extraction)
+            file_info["neo4j_skipped"] = bool(skip_neo4j)
+            file_info["qdrant_indexed"] = bool(qdrant_point_ids)
+
+            if skip_neo4j and not intentional_graph_skip:
                 skipped_components.append("Neo4j")
             if skip_qdrant:
                 skipped_components.append("Qdrant")
@@ -3125,7 +3163,11 @@ async def ingest_pipeline_incremental(
                 qdrant_point_ids=qdrant_point_ids,
                 ingestion_run_id=ingestion_run_id,
                 last_ingested_at=ingested_at,
-                status="completed_with_warnings" if graph_warning else "completed",
+                status=(
+                    "completed_with_graph_skipped"
+                    if intentional_graph_skip
+                    else "completed_with_warnings" if graph_warning else "completed"
+                ),
                 error_message=graph_warning,
                 graph_error_count=graph_errors,
                 graph_error_tolerance=graph_tolerance,
@@ -3135,7 +3177,11 @@ async def ingest_pipeline_incremental(
             save_ingestion_manifest(manifest_path, manifest)
             logger.info(
                 "[MANIFEST] Marked %s: %s",
-                "completed_with_warnings" if graph_warning else "completed",
+                (
+                    "completed_with_graph_skipped"
+                    if intentional_graph_skip
+                    else "completed_with_warnings" if graph_warning else "completed"
+                ),
                 file_info["source_path"],
             )
 
@@ -3323,6 +3369,7 @@ async def ingest_pipeline(
             ingested_at=ingested_at,
             skip_neo4j=skip_neo4j,
             skip_qdrant=skip_qdrant,
+            skip_graph_extraction=skip_graph_extraction,
             qdrant_ids_available=qdrant_upsert_succeeded,
             limit_chunks_truncated=limit_chunks_truncated,
             global_error=global_error,

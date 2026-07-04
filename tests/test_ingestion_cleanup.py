@@ -6,7 +6,10 @@ from src.ingestion.cleanup import (
     is_safe_chunk_collection_for_cleanup,
 )
 from scripts.ingest_knowledge import (
+    GraphPayload,
+    SemanticChunk,
     _file_manifest_info,
+    finalize_manifest_for_documents,
     get_incremental_file_plan,
     update_manifest_after_success,
 )
@@ -195,3 +198,41 @@ def test_partial_retry_requires_cleanup(tmp_path) -> None:
     item = plan["to_ingest"][0]
     assert item["reason"] == "retry"
     assert item["cleanup_required"] is True
+
+
+def test_manifest_completed_with_graph_skipped_when_qdrant_indexed(tmp_path) -> None:
+    source = tmp_path / "doc.pdf"
+    source.write_bytes(b"same")
+    file_info = _file_manifest_info(source)
+    chunk = SemanticChunk(
+        source_file=source.name,
+        chunk_index=0,
+        text="Benzoyl peroxide can help treat mild acne.",
+        metadata={
+            "document_id": file_info["document_id"],
+            "source_path": file_info["source_path"],
+        },
+    )
+    payload = GraphPayload(chunk_id=chunk.chunk_id, extraction_error=False)
+    manifest = {"documents": {}}
+
+    finalize_manifest_for_documents(
+        manifest=manifest,
+        doc_chunks=[(file_info, [chunk])],
+        payloads=[payload],
+        ingestion_run_id="run-1",
+        ingested_at="2026-07-05T00:00:00+00:00",
+        skip_neo4j=True,
+        skip_qdrant=False,
+        skip_graph_extraction=True,
+        qdrant_ids_available=True,
+        limit_chunks_truncated=False,
+    )
+
+    record = manifest["documents"][file_info["source_path"]]
+    assert record["status"] == "completed_with_graph_skipped"
+    assert record["graph_extraction_skipped"] is True
+    assert record["neo4j_skipped"] is True
+    assert record["qdrant_indexed"] is True
+    assert record["qdrant_point_count"] == 1
+    assert "error_message" not in record

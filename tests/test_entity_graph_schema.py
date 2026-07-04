@@ -191,13 +191,18 @@ def test_sanitize_neo4j_properties_serializes_complex_relationship_property() ->
         {
             "source": "taxonomy",
             "confidence": 1.0,
+            "aliases": ["Differin", "Epiduo"],
             "nested": {"a": ["b"]},
+            "nested_list": [{"a": "b"}],
             "none_value": None,
         }
     )
 
     assert sanitized["source"] == "taxonomy"
     assert sanitized["confidence"] == 1.0
+    assert sanitized["aliases"] == ["Differin", "Epiduo"]
     assert sanitized["nested_json"] == '{"a": ["b"]}'
+    assert sanitized["nested_list_json"] == '[{"a": "b"}]'
     assert "none_value" not in sanitized
     assert "nested" not in sanitized
+    assert "nested_list" not in sanitized

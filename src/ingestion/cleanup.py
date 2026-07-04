@@ -19,10 +19,11 @@ def _env_str(name: str, default: str = "") -> str:
 
 
 def _chunk_collection_names() -> set[str]:
-    names = {
-        _env_str("QDRANT_COLLECTION_NAME", "acne_knowledge"),
-        _env_str("CHUNK_QDRANT_COLLECTION_NAME", ""),
-    }
+    qdrant_collection = _env_str("QDRANT_COLLECTION_NAME", "acne_knowledge")
+    chunk_collection = _env_str("CHUNK_QDRANT_COLLECTION_NAME", "")
+    names = {qdrant_collection}
+    if chunk_collection and chunk_collection != "acne_chunks_v1":
+        names.add(chunk_collection)
     return {name for name in names if name}
 
 
