@@ -1,659 +1,739 @@
 # Acne Advisor AI
 
-Acne Advisor AI là hệ thống RAG y khoa tập trung vào mụn trứng cá và da liễu. Project chạy theo hướng local-first: frontend React/Vite, backend FastAPI, agent LangGraph, Qdrant cho vector search, Neo4j cho knowledge graph, PostgreSQL cho lịch sử chat, Redis cho cache, Ollama cho model local, Gemini cho sinh câu trả lời/embedding và LlamaParse cho ingestion tài liệu.
+Acne Advisor AI là hệ thống tư vấn thông tin về mụn theo hướng local-first và
+dựa trên RAG. Hệ thống kết hợp FastAPI backend, LangGraph agent, Qdrant hybrid
+retrieval, Neo4j knowledge graph, Redis semantic cache, PostgreSQL chat history
+và React/Vite frontend.
 
-## Cảnh Báo Y Khoa
+Mục tiêu của hệ thống là trả lời các câu hỏi liên quan đến mụn và điều trị mụn
+dựa trên knowledge base đã ingest, entity graph và các lớp kiểm tra an toàn theo
+quy tắc. Hệ thống không phải công cụ chẩn đoán, không kê đơn thuốc và không thay
+thế bác sĩ da liễu hoặc chuyên gia y tế.
 
-Hệ thống chỉ cung cấp thông tin tham khảo và hỗ trợ học tập/demo. Acne Advisor AI không phải công cụ chẩn đoán, không kê đơn, không thay thế bác sĩ da liễu, bác sĩ sản khoa hoặc cấp cứu. Với triệu chứng nặng như khó thở, sưng môi/mặt, sốt cao, đau quanh mắt, nhìn mờ, choáng hoặc phản ứng thuốc nghiêm trọng, người dùng cần liên hệ cơ sở y tế ngay.
+## Mục lục
 
-## Mục Tiêu Dự Án
+- [Trạng thái triển khai hiện tại](#trạng-thái-triển-khai-hiện-tại)
+- [Khả năng chính](#khả-năng-chính)
+- [Kiến trúc hệ thống](#kiến-trúc-hệ-thống)
+- [Retrieval pipeline](#retrieval-pipeline)
+- [Trạng thái knowledge base hiện tại](#trạng-thái-knowledge-base-hiện-tại)
+- [Công nghệ sử dụng](#công-nghệ-sử-dụng)
+- [Cấu trúc repository](#cấu-trúc-repository)
+- [Yêu cầu môi trường](#yêu-cầu-môi-trường)
+- [Cài đặt](#cài-đặt)
+- [Cấu hình biến môi trường](#cấu-hình-biến-môi-trường)
+- [Khởi động hạ tầng Docker](#khởi-động-hạ-tầng-docker)
+- [Chạy backend](#chạy-backend)
+- [Chạy frontend](#chạy-frontend)
+- [Kiểm tra trước khi mở giao diện](#kiểm-tra-trước-khi-mở-giao-diện)
+- [Bộ đánh giá offline](#bộ-đánh-giá-offline)
+- [Debug report và observability](#debug-report-và-observability)
+- [Cache versioning và pipeline fingerprint](#cache-versioning-và-pipeline-fingerprint)
+- [Ingestion và bảo trì knowledge base](#ingestion-và-bảo-trì-knowledge-base)
+- [Tổng quan API](#tổng-quan-api)
+- [Hoạt động của frontend](#hoạt-động-của-frontend)
+- [An toàn y khoa và giới hạn sử dụng](#an-toàn-y-khoa-và-giới-hạn-sử-dụng)
+- [Các giới hạn hiện tại](#các-giới-hạn-hiện-tại)
+- [Xử lý lỗi thường gặp](#xử-lý-lỗi-thường-gặp)
+- [Trạng thái đã xác minh](#trạng-thái-đã-xác-minh)
+- [Roadmap](#roadmap)
+- [Giấy phép](#giấy-phép)
 
-- Xây dựng trợ lý RAG chuyên về mụn, chăm sóc da mụn và thông tin da liễu liên quan.
-- Ingest tài liệu PDF/DOCX thành Markdown, chunks, knowledge graph và vector index.
-- Trả lời tiếng Việt có cấu trúc, có guardrail y khoa và có nguồn từ context truy xuất.
-- Hỗ trợ chạy local với Docker backing services và Ollama.
-- Duy trì cache/resume an toàn cho ingestion và cache câu trả lời cho Phase 2.
+## Trạng thái triển khai hiện tại
 
-## Trạng Thái Hiện Tại
+Checkpoint ổn định:
 
-Đã triển khai:
+- Tag: `system-pre-ui-verified-pass`
+- Commit: `da63b22`
 
-- Frontend React/Vite tại `src/frontend`.
-- FastAPI backend entrypoint: `src.api.app:app`.
-- Endpoint `/chat` với session history, giới hạn input, sửa lỗi UTF-8/mojibake, model selection, fallback metadata và `bypass_cache`.
-- LangGraph agent gồm các node normalize, rewrite, guardrail, cache, retrieve, safety, generate, finalize và cache store.
-- Hybrid retrieval từ Qdrant dense `dense`, sparse `bm25`, RRF fusion, metadata boost và Neo4j graph facts.
-- PostgreSQL lưu `chat_sessions`, `chat_messages` và bảng `patient_records`.
-- Redis answer cache với key prefix `cache:answer:*`.
-- Phase 1 ingestion từ PDF/DOCX sang Markdown, chunks, graph cache, Neo4j, Gemini embeddings và Qdrant.
-- Test chính thức trong `tests/` và smoke/diagnostics scripts trong `scripts/diagnostics/`.
+| Khu vực | Trạng thái | Nội dung chính | Script xác minh |
+|---|---|---|---|
+| Phase 1 | Đã triển khai và xác minh | Ingestion PDF/JSON, chunk collection, entity cards, deterministic Neo4j graph, ingestion manifest | `scripts/validate_phase1_complete.py`, `scripts/eval_phase1_readiness.py` |
+| Phase 2A | Đã triển khai và xác minh | Entity-aware query normalization, taxonomy expansion, entity retrieval, chunk metadata boosting | `scripts/eval_phase2_retrieval.py` |
+| Phase 2B | Đã triển khai và xác minh | Intent-aware context packing cho entity cards và evidence chunks | `scripts/eval_phase2_context_packing.py` |
+| Phase 2C | Đã triển khai và xác minh | Deterministic local reranker với `RERANK_PROVIDER=local_rules` | `scripts/eval_phase2_reranking.py` |
+| Phase 2D | Đã triển khai và xác minh | Answer Quality Verifier và answer guard dựa trên quy tắc | `scripts/eval_phase2_answer_quality.py`, `scripts/smoke_phase2_runtime.py --mode offline` |
+| Phase 2E | Đã triển khai và xác minh | Cache versioning, pipeline fingerprint, observability đã sanitize, debug report | `scripts/inspect_cache_versions.py`, `scripts/generate_phase2_debug_report.py` |
+| Pre-UI audit | Đã triển khai và xác minh | Import API, OpenAPI routes, health checks, frontend API contract | `scripts/pre_ui_runtime_check.py` |
 
-Giới hạn hiện tại:
+## Khả năng chính
 
-- Cần cấu hình đúng Docker services, Ollama và API keys.
-- `src/web` và `src/web_legacy` là HTML legacy; frontend đang dùng là `src/frontend`.
-- `pgvector` mới là hướng placeholder; vector store đang dùng thực tế là Qdrant.
+- Hybrid retrieval với dense vector và sparse vector trong Qdrant: `dense` và
+  `bm25`.
+- Entity-aware normalization cho drug product, active ingredient, drug class,
+  condition và safety context.
+- Taxonomy-backed query expansion không gọi LLM.
+- Tách riêng chunk collection và entity collection trong Qdrant.
+- Metadata boosting theo các trường chuyên biệt của miền da liễu/mụn.
+- Candidate merge giữa entity cards và evidence chunks.
+- Deterministic local reranking qua `RERANK_PROVIDER=local_rules`.
+- Intent-aware context packing trước bước generation.
+- LangGraph runtime gồm cache lookup, guardrail, retrieval, generation,
+  answer verification, cache store và observability export tùy chọn.
+- Answer Quality Verifier dựa trên quy tắc để phát hiện một số mâu thuẫn thường
+  gặp trong miền trị mụn và an toàn thuốc.
+- Redis semantic cache được cô lập bằng answer version và pipeline fingerprint.
+- FastAPI backend và React/Vite frontend.
+- Bộ offline evaluation cho Phase 1 và Phase 2.
 
-## Tech Stack
+Các phần chưa phải tính năng production đã triển khai:
+
+- Chưa có web fallback retrieval.
+- Chưa có external reranker dùng cho production.
+- Chưa có LLM-backed medical reviewer.
+- Không có chức năng chẩn đoán lâm sàng đầy đủ hoặc tự động kê đơn điều trị.
+
+## Kiến trúc hệ thống
+
+```mermaid
+flowchart LR
+    U[Người dùng] --> UI[React UI]
+    UI --> API[FastAPI]
+    API --> G[LangGraph Agent]
+
+    G --> PG[(PostgreSQL chat history)]
+    G --> R[(Redis semantic cache)]
+    G --> Q[(Qdrant chunks + entities)]
+    G --> N[(Neo4j graph)]
+    G --> LLM[Gemini hoặc Ollama provider]
+    G --> OBS[Observability đã sanitize]
+
+    Q --> G
+    N --> G
+    LLM --> G
+    G --> API
+    API --> UI
+```
+
+Luồng xử lý truy vấn:
+
+```mermaid
+flowchart TD
+    A[Câu hỏi người dùng] --> B[Normalize]
+    B --> C[Rewrite follow-up nếu cần]
+    C --> D[Domain và safety guard]
+    D -->|ngoài phạm vi hoặc không an toàn| F[Finalize safe refusal]
+    D -->|trong phạm vi| E[Redis cache lookup]
+    E -->|hit| F
+    E -->|miss| H[Extract symptoms]
+    H --> I[Hybrid retrieval]
+    I --> J[Candidate merge và local rerank]
+    J --> K[Context packing]
+    K --> L[LLM generation]
+    L --> F[Finalize response]
+    F --> M[Answer Quality Verifier]
+    M --> N[Cache store nếu đủ điều kiện]
+    N --> O[Observability export tùy chọn]
+    O --> P[API response]
+```
+
+## Retrieval pipeline
+
+Runtime retrieval của Phase 2 được triển khai trong `src/database/retriever.py`
+và package `src/retrieval/`:
+
+1. Query normalization bằng `DrugEntityNormalizer`.
+2. Taxonomy-backed query expansion.
+3. Query embedding bằng Gemini embedding theo `EMBEDDING_MODEL`.
+4. Qdrant dense search trên chunk collection.
+5. Qdrant sparse BM25 search với cùng thuật toán hashed sparse vector dùng ở
+   ingestion.
+6. Reciprocal Rank Fusion giữa dense results và sparse results.
+7. Query-adaptive dermatology metadata boost.
+8. Entity-card retrieval từ `ENTITY_QDRANT_COLLECTION_NAME`.
+9. Candidate merge giữa entity candidates và chunk candidates.
+10. Local deterministic reranking.
+11. Intent-aware context packing.
+12. Neo4j 1-hop graph enrichment.
+13. Prompt generation, answer quality verification, cache store và observability
+    tùy chọn.
+
+Runtime đã xác minh đang dùng:
+
+- Chunk collection: `acne_knowledge`
+- Entity collection: `acne_entities_v1`
+
+## Trạng thái knowledge base hiện tại
+
+Trạng thái đã xác minh tại tag `system-pre-ui-verified-pass`:
+
+| Thành phần | Trạng thái đã xác minh |
+|---|---|
+| Qdrant chunk collection | `acne_knowledge`, 641 points |
+| Qdrant entity collection | `acne_entities_v1`, 20 points |
+| Dense vector | Named vector `dense`, 3072 dimensions |
+| Sparse vector | Named sparse vector `bm25` |
+| Neo4j deterministic graph | 21 nodes, 15 relationships |
+
+Các số liệu này là snapshot tại checkpoint đã xác minh. Chúng có thể thay đổi
+sau một lần ingestion hoặc index rebuild hợp lệ. Không cần reset database hoặc
+Docker volume chỉ để khớp các số liệu này; hãy dùng validation scripts để kiểm
+tra trạng thái thực tế.
+
+## Công nghệ sử dụng
+
+Chỉ ghi version khi repository có pin hoặc khai báo rõ.
 
 | Lớp | Công nghệ |
 |---|---|
-| Frontend | React 19, Vite |
+| Python runtime | `>=3.11` theo `pyproject.toml` |
 | API | FastAPI, Uvicorn, Pydantic |
-| Agent | LangGraph |
-| LLM | Gemini, Ollama fallback/tuỳ chọn |
-| Local model | Ollama, mặc định `qwen2.5` |
-| Parsing tài liệu | LlamaParse |
-| Embedding | Gemini `models/gemini-embedding-2`, dim `3072` |
-| Vector DB | Qdrant collection `acne_knowledge`, vector `dense`, sparse `bm25` |
-| Graph DB | Neo4j 5 + APOC |
-| Relational DB | PostgreSQL 16 |
-| Cache | Redis 7 |
-| Test | pytest, pytest-asyncio |
+| Agent workflow | LangGraph, LangChain packages |
+| LLM providers | Gemini qua `google-generativeai`, Ollama |
+| Embeddings | Gemini `models/gemini-embedding-2`, 3072 dimensions |
+| Vector database | Qdrant, named vector `dense`, sparse vector `bm25` |
+| Graph database | Neo4j 5 với APOC trong Docker Compose |
+| Relational database | PostgreSQL 16 với image pgvector |
+| Cache | Redis 7 Alpine |
+| Frontend | React `^19.2.6`, Vite `^8.0.12` |
+| Testing | pytest, pytest-asyncio, httpx |
 
-## Kiến Trúc Tổng Quan
+`pgvector` đang có trong hạ tầng và dependencies, nhưng runtime vector store
+hiện dùng Qdrant. `PgVectorStore` vẫn là placeholder.
 
-Docker Compose hiện chỉ chạy backing services: PostgreSQL, Redis, Qdrant và Neo4j. Trong môi trường development, backend FastAPI và frontend React/Vite chạy riêng.
-
-Sơ đồ tuần tự chi tiết được tách riêng tại: [Sơ đồ luồng hoạt động](docs/sequence-diagrams.md).
+## Cấu trúc repository
 
 ```text
-User
-  -> React/Vite Frontend
-  -> FastAPI Backend
-  -> LangGraph Agent
-  -> Guardrails / Redis Cache / Hybrid Retriever
-  -> Qdrant + Neo4j
-  -> Gemini hoặc Ollama
-  -> PostgreSQL chat history
+src/
+  agent/          LangGraph workflow, nodes, prompts, LLM providers
+  api/            FastAPI app, schemas, preflight checks
+  cache/          Redis helpers và semantic answer-cache logic
+  database/       PostgreSQL, Qdrant, Neo4j access layers
+  frontend/       React/Vite web UI
+  ingestion/      Metadata extraction, JSON loader, ingestion cleanup helpers
+  knowledge/      Entity cards, taxonomy normalization, graph/index schemas
+  observability/  Pipeline fingerprint, trace sanitizer, JSONL export
+  quality/        Deterministic Answer Quality Verifier
+  retrieval/      Query normalization, expansion, merge, rerank, context packing
+
+scripts/          Ingestion, schema init, validators, evals, debug reports
+tests/            Unit tests và offline integration tests
+data/             Local runtime data, caches, manifests, Docker-mounted storage
+reports/          Generated debug reports
 ```
 
-## Cấu Trúc Thư Mục
+`data/`, `reports/`, `logs/`, frontend `dist/`, `.env` và các file backup env
+là runtime artifacts đã được gitignore.
 
-```text
-acne-agent-system/
-├── docs/
-│   └── sequence-diagrams.md
-├── src/
-│   ├── api/                  # FastAPI app, routes, preflight
-│   ├── agent/                # LangGraph workflow, nodes, prompts, LLM provider
-│   ├── cache/                # Redis connection và answer cache
-│   ├── database/             # PostgreSQL, Qdrant, Neo4j access layer
-│   ├── frontend/             # React/Vite web UI đang dùng
-│   ├── ingestion/            # Dermatology metadata helpers
-│   ├── skills/               # Skill registry/base modules
-│   ├── web/                  # Legacy static HTML
-│   └── web_legacy/           # Legacy static HTML copy
-├── scripts/
-│   ├── ingest_knowledge.py   # Phase 1 offline ingestion
-│   ├── init_schema.py        # PostgreSQL + Qdrant bootstrap
-│   ├── init_chat_schema.py   # Chat history schema
-│   ├── clear_redis_cache.py  # Xoá Redis answer cache của app
-│   └── diagnostics/          # Smoke/debug/inspection scripts
-├── tests/                    # pytest tests
-├── data/                     # Runtime volumes/cache, gitignored
-├── sample_data/              # Tài liệu nguồn local, gitignored
-├── docker-compose.yml
-├── requirements.txt
-├── pyproject.toml
-├── .env.example
-└── README.md
-```
+## Yêu cầu môi trường
 
-## Thành Phần Chính
+Cần có để chạy local runtime và các bước xác minh:
 
-- **Frontend (`src/frontend`)**: giao diện chat, sidebar lịch sử, ẩn/xoá lịch sử, chọn model, auto fallback và gọi API backend.
-- **FastAPI (`src/api/app.py`)**: endpoint `/chat`, `/health`, `/retrieve`, `/models`, quản lý chat history và input validation.
-- **LangGraph agent (`src/agent`)**: điều phối normalize, rewrite follow-up, guardrail, cache, retrieval, safety check, generate và finalize.
-- **Qdrant**: lưu chunks với vector dense `dense`, sparse `bm25` và payload metadata.
-- **Neo4j**: lưu knowledge graph từ Phase 1, dùng để bổ sung graph facts trong Phase 2.
-- **PostgreSQL**: lưu lịch sử chat và schema phụ.
-- **Redis**: cache câu trả lời hợp lệ, không dùng cho câu có history hoặc ngữ cảnh rủi ro cao.
-- **Ollama**: chạy local model, mặc định `qwen2.5`, dùng trong graph extraction và fallback/generation tuỳ cấu hình.
-- **Gemini**: sinh câu trả lời và embedding.
-- **LlamaParse**: parse PDF/DOCX thành Markdown trong Phase 1.
+- Python 3.11 trở lên.
+- Docker Desktop với Docker Compose v2.
+- Node.js và npm cho `src/frontend`.
+- Ollama reachable tại `OLLAMA_BASE_URL` để `/health` và fallback/local
+  generation hoạt động.
 
-## Phase 1 Offline Ingestion
+Cần có cho các thao tác gọi Gemini:
 
-Entry point:
-
-```powershell
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py
-```
-
-Luồng chính:
-
-1. Tìm `*.pdf`, `*.docx` và `*.json` trong `SAMPLE_DATA_DIR` hoặc `--source`.
-2. Parse PDF/DOCX bằng LlamaParse sang Markdown; JSON web dataset được đọc local.
-3. Cache Markdown trong `data/cache/markdown`.
-4. Chunk Markdown theo header và `CHUNK_SIZE`.
-5. Trích xuất graph bằng Ollama.
-6. Cache graph trong `data/cache/graph` với key gồm version, prompt schema, model, source file, chunk index và chunk hash.
-7. Upsert graph vào Neo4j.
-8. Embed chunks bằng Gemini.
-9. Upsert Qdrant với `dense` và `bm25`.
-
-Supported knowledge file types:
-- PDF/DOCX: dùng pipeline LlamaParse hiện tại.
-- JSON web dataset: file như `web_raw_dataset.json` chứa list records hoặc wrapper `records/data/items/documents/pages`, mỗi record có `seed_url`, `source_url`, `raw_text`.
-- JSON được xử lý local, không dùng LlamaParse.
-- JSON chunks preserve `source_url`, `seed_url`, `record_index`, `source_type=web_json` trong payload metadata.
-- Đặt `web_raw_dataset.json` vào `sample_data/` trước clean rebuild nếu muốn ingest chung với PDF/DOCX.
-
-Incremental ingestion dùng manifest mặc định `data/ingestion_manifest.json`.
-Tài liệu có `status=completed` hoặc `status=completed_with_warnings` sẽ được skip khi `content_hash` không đổi.
-`completed_with_warnings` dành cho trường hợp ingest chính đã thành công nhưng chỉ có một số lỗi graph extraction nằm trong ngưỡng cho phép; `partial` sẽ được retry ở lần incremental sau.
-Manifest lưu `qdrant_point_ids`, `qdrant_point_count`, collection và metadata version/embedding theo từng document.
-Khi incremental gặp file `changed`, `partial`, `failed` hoặc `cleanup_failed` cần retry, pipeline sẽ cleanup Qdrant cũ trước khi upsert lại: ưu tiên xóa theo `qdrant_point_ids`, fallback bằng filter scoped theo `document_id`/`source_path`/`kb_version`.
-Guard cleanup chỉ cho phép collection chunk (`QDRANT_COLLECTION_NAME` hoặc `CHUNK_QDRANT_COLLECTION_NAME`) và không cleanup entity collection như `acne_entities_v1`.
-Neo4j graph cũ chưa được cleanup tự động trong bước này.
-
-Lệnh thường dùng:
-
-```powershell
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --limit-files 1 --limit-chunks 5
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --refresh-markdown
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --refresh-graph-cache
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --no-resume-graph-cache
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --clear-graph-cache
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --skip-graph-extraction
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --skip-neo4j
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --skip-qdrant
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --dry-run
-.\venv\Scripts\python.exe scripts\inspect_ingestion_manifest.py --show-missing
-```
-
-### Phase 1 Readiness Eval
-
-Eval offline trước clean rebuild dùng golden set tại `tests/golden/phase1_ingest_eval_cases.json`.
-Eval này không chạy ingestion, không connect Qdrant/Neo4j, không gọi Gemini.
-
-```powershell
-.\venv\Scripts\python.exe -m pytest tests\test_phase1_ingest_eval.py -q --no-cov
-.\venv\Scripts\python.exe scripts\eval_phase1_readiness.py --verbose
-```
-
-Pass criteria chính:
-- `Dalacin T -> clindamycin -> topical_antibiotic`
-- `Epiduo -> adapalene + benzoyl_peroxide`
-- `Differin -> adapalene -> topical_retinoid`
-- `benzoyl_peroxide` và `adapalene` không bị map thành antibiotic
-- cleanup planning không bao giờ target `acne_entities_v1`
-- entity payload có embedding/version metadata
-
-## Phase 2 Online Chat/RAG
-
-Entry point:
-
-```powershell
-uvicorn src.api.app:app --reload --port 8000
-```
-
-Luồng chính:
-
-1. Frontend gửi `POST /chat`.
-2. API sửa UTF-8/mojibake, validate input và lock request cùng session.
-3. API nạp history gần nhất từ PostgreSQL nếu cần.
-4. LangGraph rewrite câu follow-up thành câu độc lập khi cần.
-5. Guardrail xử lý out-of-domain, emergency, prompt injection và yêu cầu kê đơn/thuốc nguy cơ cao.
-6. Redis cache lookup bị bỏ qua nếu `bypass_cache=true`, có history hoặc ngữ cảnh không cache được.
-7. Cache miss thì chạy hybrid retrieval: Qdrant dense/sparse, RRF, metadata boost, Neo4j graph facts.
-8. Prompt y khoa được build từ context, graph facts và safety flags.
-9. Gemini/Ollama sinh câu trả lời, có fallback nếu được bật.
-10. Formatter hậu xử lý câu trả lời, thêm disclaimer và metadata.
-11. API lưu chat vào PostgreSQL rồi trả response.
-
-### Phase 2 Readiness
-
-Baseline Phase 1 ổn định tại tag `phase1-hardened-pass`: chunk collection `acne_knowledge`, entity collection `acne_entities_v1`, embedding `models/gemini-embedding-2` dim `3072`, Neo4j deterministic graph 21 nodes / 15 relationships.
-
-Kiểm tra read-only trước khi nâng cấp retrieval:
-
-```powershell
-.\venv\Scripts\python.exe scripts\validate_phase1_complete.py
-.\venv\Scripts\python.exe scripts\eval_phase1_readiness.py --verbose
-.\venv\Scripts\python.exe scripts\inspect_phase2_readiness.py
-```
-
-Runtime Phase 2 hiện đã đọc Qdrant hybrid `dense`/`bm25`, entity cards từ `acne_entities_v1`, Neo4j graph facts, local reranking và context packing theo intent. Legacy LLM graph extraction không bắt buộc cho baseline Phase 1 hiện tại.
-
-Phase 2A bổ sung nền entity-aware retrieval:
-
-- Chuẩn hoá query bằng `DrugEntityNormalizer`.
-- Mở rộng query bằng taxonomy local, không gọi LLM.
-- Exact/payload entity retrieval từ `acne_entities_v1`.
-- Metadata boost cho chunks trong `acne_knowledge` theo `drug_product`, `active_ingredient`, `drug_class`, `condition`, `query_intent_hint`, `safety_context`, `concern` và `content_type`.
-- Merge candidates từ entity cards và chunks, kèm retrieval trace trong metadata/debug.
-
-Phase 2B bổ sung entity-aware context packing:
-
-- Pack `ENTITY CARD` và `EVIDENCE CHUNK` theo intent.
-- Với câu hỏi thuốc, giữ entity liên quan và thêm chunk evidence nếu có.
-- Với câu hỏi loại mụn, ưu tiên chunk evidence theo `concern`, `content_type`, `condition`, `domain_topic`.
-- Packed context được bridge về format context cũ để prompt hiện tại vẫn tương thích.
-
-Phase 2C bổ sung local/offline-first reranking:
-
-- Rerank merged candidates sau candidate merge và trước context packing.
-- Provider mặc định `local_rules`, deterministic và không gọi external API.
-- `RERANK_ENABLED=false` tắt reranker; `RERANK_TOP_N` và `RERANK_PROVIDER` điều chỉnh runtime.
-- `local_model` chỉ là extension point có fallback về `local_rules`, không tự tải model.
-
-Phase 2D bổ sung answer quality verifier/guard deterministic:
-
-- Kiểm tra offline các mâu thuẫn phổ biến như benzoyl peroxide/adapalene bị gọi nhầm là kháng sinh, clindamycin bị gọi nhầm là retinoid, câu trả lời loại mụn bị drift thành danh sách thuốc, và cảnh báo an toàn retinoid/isotretinoin.
-- Runtime graph chạy node `answer_quality` sau finalize và trước cache store. Mặc định `ANSWER_GUARD_MODE=metadata_only`, chỉ ghi metadata/report và không tự sửa answer.
-- `scripts/eval_phase2_answer_quality.py` chạy golden cases offline, không gọi LLM/embedding/API ngoài.
-- `scripts/smoke_phase2_runtime.py --mode offline` chạy smoke retrieval/rerank/context/quality bằng dữ liệu taxonomy local. `--live-chat` mới gọi runtime chat và có thể gọi LLM theo cấu hình.
-
-Phase 2E bổ sung cache versioning, observability và debug report offline:
-
-- Cache answer chuyển sang `CACHE_ANSWER_VERSION=v5` và key Redis có thêm `pipeline_fingerprint` deterministic, nên cache cũ không bị xóa nhưng không bị reuse sau thay đổi retrieval/rerank/context/answer guard.
-- `src/observability/versioning.py` tạo pipeline manifest/fingerprint không chứa API key/secrets.
-- `src/observability/trace_exporter.py` có sanitizer redaction/truncation và JSONL exporter. Runtime export mặc định tắt bằng `OBSERVABILITY_ENABLED=false`.
-- `scripts/inspect_cache_versions.py`, `scripts/eval_phase2_all.py` và `scripts/generate_phase2_debug_report.py` đều là offline/read-only, không chạy ingestion và không gọi live chat.
-- `logs/` và `reports/` là generated artifacts, không commit.
-
-Giới hạn hiện tại: chưa có external rerank provider/model thật, chưa có LLM-backed medical reviewer, chưa có web fallback, chưa có Neo4j expansion sâu hơn và chưa thay thế được clinical safety engine.
-
-Validation:
-
-```powershell
-.\venv\Scripts\python.exe scripts\eval_phase2_retrieval.py
-.\venv\Scripts\python.exe scripts\eval_phase2_context_packing.py
-.\venv\Scripts\python.exe scripts\eval_phase2_reranking.py
-.\venv\Scripts\python.exe scripts\eval_phase2_answer_quality.py
-.\venv\Scripts\python.exe scripts\smoke_phase2_runtime.py --mode offline
-.\venv\Scripts\python.exe scripts\inspect_cache_versions.py
-.\venv\Scripts\python.exe scripts\eval_phase2_all.py
-.\venv\Scripts\python.exe scripts\generate_phase2_debug_report.py
-.\venv\Scripts\python.exe scripts\inspect_phase2_readiness.py
-.\venv\Scripts\python.exe scripts\validate_phase1_complete.py
-.\venv\Scripts\python.exe -m pytest tests -q --no-cov
-```
-
-## Hướng Dẫn Cài Đặt
-
-Yêu cầu:
-
-- Python 3.11+
-- Docker Desktop + Docker Compose v2
-- Node.js 20+ cho `src/frontend`
-- Ollama
 - `GOOGLE_API_KEY`
+- `EMBEDDING_MODEL=models/gemini-embedding-2`
+- `EMBEDDING_DIMENSIONS=3072`
+
+Cần có cho PDF/DOCX ingestion:
+
 - `LLAMA_CLOUD_API_KEY`
 
-Cài Python dependencies:
+Tùy chọn:
+
+- `QDRANT_API_KEY` cho Qdrant Cloud hoặc Qdrant có auth. Để trống khi dùng local
+  Docker Qdrant không bật auth.
+
+Các command trong tài liệu dùng cú pháp Windows PowerShell vì hệ thống đã được
+xác minh bằng PowerShell.
+
+## Cài đặt
+
+Từ một clone mới:
 
 ```powershell
-cd C:\Study\SuperRAGSystem\acne-agent-system
+git clone <repository-url>
+cd acne-agent-system
+
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-```
 
-Tạo file môi trường:
-
-```powershell
 Copy-Item .env.example .env
 ```
 
-Sau đó chỉnh `.env` theo máy local.
-
-## Chạy Docker
+Cài frontend dependencies:
 
 ```powershell
-docker compose up -d postgres redis qdrant neo4j
-docker ps
+cd src\frontend
+npm install
+cd ..\..
 ```
 
-Dừng services:
-
-```powershell
-docker compose down
-```
-
-Port mặc định:
-
-| Service | URL |
-|---|---|
-| PostgreSQL | `localhost:5433` |
-| Redis | `localhost:6379` |
-| Qdrant | `http://localhost:6333` |
-| Neo4j HTTP | `http://localhost:7474` |
-| Neo4j Bolt | `bolt://localhost:7687` |
-
-## Chạy Ollama
-
-```powershell
-ollama serve
-ollama pull qwen2.5
-ollama list
-```
-
-Kiểm tra Ollama API:
-
-```powershell
-Invoke-RestMethod http://localhost:11434/api/tags
-```
-
-## Init Schema
-
-```powershell
-.\venv\Scripts\python.exe scripts\init_schema.py
-.\venv\Scripts\python.exe scripts\init_chat_schema.py
-```
-
-`init_schema.py` tạo/validate PostgreSQL và Qdrant collection `acne_knowledge` với `dense=3072` và `bm25`.
-
-`init_chat_schema.py` tạo `chat_sessions`, `chat_messages` và index liên quan bằng `CREATE TABLE IF NOT EXISTS`; script không xoá dữ liệu cũ.
-
-## Entity-Centric Knowledge Index
-
-Pha 1 entity index tạo collection riêng `acne_entities_v1` cho `EntityCard` build từ `data/taxonomy/drug_aliases.yaml`. Collection chunk runtime hiện tại (`QDRANT_COLLECTION_NAME`, mặc định `acne_knowledge`) không bị đổi.
-
-Dry-run, không ghi Qdrant và không gọi embedding:
-
-```powershell
-.\venv\Scripts\python.exe scripts\build_entity_index.py --dry-run
-```
-
-Upsert thật vào entity collection sau khi đã cấu hình `GOOGLE_API_KEY`:
-
-```powershell
-.\venv\Scripts\python.exe scripts\build_entity_index.py --no-dry-run --collection acne_entities_v1
-```
-
-Entity collection dùng schema Qdrant tương tự chunks: named dense vector `dense` với `EMBEDDING_DIMENSIONS` và sparse vector `bm25`. Không dùng `--recreate true` với collection chunk.
-
-Payload entity cards ghi metadata version/embedding để validate sau clean rebuild: `embedding_provider`, `embedding_model`, `embedding_dimensions`, `kb_version`, `taxonomy_version`, `entity_schema_version`.
-
-## Deterministic Entity Graph
-
-Pha 1 deterministic entity graph tạo Neo4j layer tối thiểu từ taxonomy/`EntityCard`, không dùng LLM và không thay thế graph extraction hiện tại. Layer này chỉ chứa labels `DrugProduct`, `ActiveIngredient`, `DrugClass`, `Condition`, `SafetyContext`, `SideEffect` và các relationship tối thiểu như `HAS_ACTIVE_INGREDIENT`, `BELONGS_TO_CLASS`, `USED_FOR`, `HAS_SIDE_EFFECT`, `CONTRAINDICATED_IN`.
-
-Dry-run, không connect Neo4j:
-
-```powershell
-.\venv\Scripts\python.exe scripts\build_entity_graph.py --dry-run
-```
-
-Sau clean rebuild, apply schema + upsert deterministic graph khi đã sẵn sàng:
-
-```powershell
-.\venv\Scripts\python.exe scripts\build_entity_graph.py --apply-schema --upsert --validate
-```
-
-Script không có option xoá graph. Neo4j writes dùng `MERGE` và chỉ upsert deterministic entity nodes/relationships.
-
-Validate chunk/entity collections sau clean rebuild:
-
-```powershell
-.\venv\Scripts\python.exe scripts\validate_kb_collections.py --strict true
-```
-
-Script validate chỉ đọc Qdrant: kiểm tra collection tồn tại, dense `dense`, sparse `bm25`, dimensions, sample payload metadata và compatibility giữa chunk/entity collection.
-
-## Clean Rebuild Flow
-
-Khi cần rebuild sạch toàn bộ KB sau Pha 1, hãy dừng API trước và backup dữ liệu nếu cần. Sau đó developer có thể reset Docker volumes/data theo quy trình riêng của môi trường, rồi chạy lại theo thứ tự:
+Khởi động backing services:
 
 ```powershell
 docker compose up -d
+docker compose ps
+```
+
+Khởi tạo schema khi thiết lập môi trường local mới:
+
+```powershell
 .\venv\Scripts\python.exe scripts\init_schema.py
 .\venv\Scripts\python.exe scripts\init_chat_schema.py
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --skip-graph-extraction --skip-neo4j
-.\venv\Scripts\python.exe scripts\inspect_ingestion_manifest.py --show-missing
-.\venv\Scripts\python.exe scripts\build_entity_index.py --dry-run
-.\venv\Scripts\python.exe scripts\build_entity_index.py --no-dry-run --collection acne_entities_v1
-.\venv\Scripts\python.exe scripts\build_entity_graph.py --dry-run
-.\venv\Scripts\python.exe scripts\build_entity_graph.py --apply-schema --upsert --validate
-.\venv\Scripts\python.exe scripts\validate_kb_collections.py --chunk-collection acne_knowledge --entity-collection acne_entities_v1 --strict true
-.\venv\Scripts\python.exe scripts\validate_phase1_complete.py
-.\venv\Scripts\python.exe scripts\eval_phase1_readiness.py --verbose
-.\venv\Scripts\python.exe -m pytest tests -q --no-cov
 ```
 
-Legacy LLM graph extraction trong `scripts/ingest_knowledge.py` là optional và rất chậm; deterministic entity graph bằng `scripts/build_entity_graph.py` là lớp Phase 1 cần validate cho entity/drug graph hiện tại.
+`init_schema.py` validate hoặc tạo Qdrant chunk collection. Script chỉ xóa và
+tạo lại Qdrant collection nếu biến `FORCE_RECREATE_QDRANT_COLLECTION=true` được
+set rõ ràng. Không dùng biến này như bước khởi động thường ngày.
 
-Runtime chunk collection hiện tại là `acne_knowledge`. Giữ `QDRANT_COLLECTION_NAME=acne_knowledge` và `CHUNK_QDRANT_COLLECTION_NAME=acne_knowledge`; nếu môi trường cũ còn `CHUNK_QDRANT_COLLECTION_NAME=acne_chunks_v1`, validation/runtime sẽ fallback về `QDRANT_COLLECTION_NAME`.
+## Cấu hình biến môi trường
 
-## Chạy Ingestion
+Sao chép `.env.example` thành `.env` và chỉ điền những secret cần cho chế độ
+bạn muốn chạy. Không commit `.env`.
 
-Đặt tài liệu vào `sample_data/` hoặc truyền thư mục bằng `--source`.
+| Nhóm | Biến | Giá trị đã xác minh hoặc mục đích |
+|---|---|---|
+| Services | `DATABASE_URL` | PostgreSQL async URL; giữ kín credentials |
+| Services | `REDIS_URL` | Redis URL |
+| Services | `NEO4J_URI` | Giá trị local đã xác minh: `bolt://127.0.0.1:7687` |
+| Services | `QDRANT_URL` | Local default: `http://localhost:6333` |
+| Services | `QDRANT_API_KEY` | Để trống cho local Docker; set khi dùng secured Qdrant |
+| Qdrant | `QDRANT_COLLECTION_NAME` | `acne_knowledge` |
+| Qdrant | `CHUNK_QDRANT_COLLECTION_NAME` | `acne_knowledge` |
+| Qdrant | `ENTITY_QDRANT_COLLECTION_NAME` | `acne_entities_v1` |
+| Embedding | `EMBEDDING_PROVIDER` | `google` |
+| Embedding | `EMBEDDING_MODEL` | `models/gemini-embedding-2` |
+| Embedding | `EMBEDDING_DIMENSIONS` | `3072` |
+| LLM | `GOOGLE_API_KEY` | Chỉ điền trong `.env`; không đưa vào tài liệu |
+| LLM | `GOOGLE_MODEL` | `.env.example`: `gemini-3.5-flash`; runtime có default fallback nếu unset |
+| LLM | `OLLAMA_BASE_URL` | `http://localhost:11434` |
+| LLM | `OLLAMA_MODEL` | `.env.example`: `qwen2.5` |
+| Rerank | `RERANK_ENABLED` | `true` |
+| Rerank | `RERANK_PROVIDER` | `local_rules` |
+| Rerank | `RERANK_TOP_N` | `8` |
+| Answer guard | `ANSWER_VERIFIER_ENABLED` | `true` |
+| Answer guard | `ANSWER_GUARD_MODE` | `metadata_only` |
+| Answer guard | `ANSWER_VERIFIER_STRICT` | `false` |
+| Cache | `CACHE_ENABLED` | `true` |
+| Cache | `CACHE_TTL_SECONDS` | `86400` |
+| Cache | `CACHE_ANSWER_VERSION` | `v5` |
+| Versioning | `PROMPT_VERSION` | `medical_prompt_v2` |
+| Versioning | `KB_VERSION` | `acne_kb_v1` |
+| Versioning | `TAXONOMY_VERSION` | `drug_taxonomy_v1` |
+| Versioning | `ENTITY_SCHEMA_VERSION` | `entity_schema_v1` |
+| Versioning | `CHUNK_SCHEMA_VERSION` | `chunk_schema_v2` |
+| Versioning | `INGESTION_PIPELINE_VERSION` | `ingestion_pipeline_v2` |
+| Observability | `OBSERVABILITY_ENABLED` | `false` |
+| Observability | `OBSERVABILITY_TRACE_DIR` | `logs/phase2_traces` |
+| Observability | `OBSERVABILITY_MAX_TEXT_CHARS` | `500` |
+| API debug | `PHASE2_DEBUG_METADATA` | `false` |
+| Input control | `MAX_MESSAGE_CHARS` | `500` |
+| Frontend | `VITE_API_URL` | Ví dụ: `http://localhost:8000`; fallback của frontend là `http://127.0.0.1:8000` |
+
+`.env.example` còn có một số placeholder cho provider hoặc tích hợp tương lai.
+Chỉ dùng các biến được code path hiện tại hỗ trợ.
+
+## Khởi động hạ tầng Docker
+
+Khởi động local backing services:
 
 ```powershell
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --source sample_data
+docker compose up -d
+docker compose ps
 ```
 
-Sau một lần Phase 1 full thành công, kiểm tra incremental bằng:
+Một số lệnh kiểm tra dịch vụ:
 
 ```powershell
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --source sample_data --incremental
+Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:6333/collections" | ConvertTo-Json -Depth 10
+Invoke-RestMethod http://localhost:11434/api/tags
 ```
 
-Kỳ vọng nếu tài liệu không đổi: `Files to ingest: 0`.
+Docker Compose mount runtime data dưới `data/`. Không dùng xóa volume như cách
+xử lý lỗi mặc định.
 
-Test nhỏ:
+Discrepancy hiện đã biết: trong môi trường đã xác minh, Docker Compose có thể
+báo Qdrant `unhealthy` trong khi Qdrant API và application health vẫn hoạt động.
+Hãy xem đây là healthcheck discrepancy cần theo dõi, không phải bằng chứng rằng
+Qdrant đã hỏng.
+
+## Chạy backend
+
+Từ repository root:
 
 ```powershell
-$env:CHUNK_SIZE="2000"
-$env:LLM_CONCURRENCY="2"
-$env:INGEST_BATCH_SIZE="16"
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --limit-files 1 --limit-chunks 5 --refresh-graph-cache
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py --limit-files 1 --limit-chunks 5
+.\venv\Scripts\python.exe -m uvicorn src.api.app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Chạy resume:
+Các URL chính:
 
-```powershell
-.\venv\Scripts\python.exe scripts\ingest_knowledge.py
-```
+- API base URL: `http://127.0.0.1:8000`
+- Swagger/OpenAPI docs: `http://127.0.0.1:8000/docs`
+- Health check: `http://127.0.0.1:8000/health`
 
-## Chạy Backend
-
-```powershell
-cd C:\Study\SuperRAGSystem\acne-agent-system
-.\venv\Scripts\Activate.ps1
-uvicorn src.api.app:app --reload --port 8000
-```
-
-Health check:
+Health check dạng read-only:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health | ConvertTo-Json -Depth 20
 ```
 
-Nếu Phase 1 đã có dữ liệu, có thể kiểm tra retrieval:
+Endpoint `/chat` có thể gọi LLM provider đã cấu hình. Không dùng `/chat` như
+lệnh kiểm tra offline mặc định.
+
+## Chạy frontend
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/retrieve?q=benzoyl%20peroxide&top_k=3" | ConvertTo-Json -Depth 8
-```
-
-Sau đó test `/chat` thủ công khi đã sẵn sàng dùng LLM/API key.
-
-## Chạy Frontend
-
-```powershell
-cd C:\Study\SuperRAGSystem\acne-agent-system\src\frontend
+cd src\frontend
 npm install
 npm run dev
 ```
 
-Frontend thường chạy tại:
+Vite thường in ra local URL, thường là `http://localhost:5173`. Nếu port bận,
+Vite có thể chọn port khác.
 
-```text
-http://localhost:5173
-```
-
-Build:
+Các command frontend từ `src/frontend/package.json`:
 
 ```powershell
+npm run lint
 npm run build
+npm run preview
 ```
 
-## Endpoint Chính
+Frontend đọc `VITE_API_URL`. Nếu biến này unset, API client fallback về
+`http://127.0.0.1:8000`.
 
-| Method | Endpoint | Mục đích |
-|---|---|---|
-| `GET` | `/health` | Kiểm tra PostgreSQL, Qdrant, Neo4j, Redis, Ollama |
-| `GET` | `/models` | Danh sách model Gemini/Ollama |
-| `POST` | `/chat` | Chat chính qua LangGraph |
-| `GET` | `/retrieve?q=...&top_k=5` | Debug hybrid retrieval |
-| `GET` | `/chat/sessions` | Danh sách session chat |
-| `DELETE` | `/chat/sessions` | Xoá toàn bộ chat history và Redis answer cache của app |
-| `GET` | `/chat/sessions/{session_id}/messages` | Lấy messages của session |
-| `PATCH` | `/chat/sessions/{session_id}/rename` | Đổi tên session |
-| `PATCH` | `/chat/sessions/{session_id}/hide` | Ẩn session |
-| `POST` | `/chat/sessions/sync` | Đồng bộ local sessions lên PostgreSQL |
+## Kiểm tra trước khi mở giao diện
 
-Ví dụ gọi `/chat`:
+Chạy lệnh sau trước khi mở UI để kiểm tra runtime local:
 
 ```powershell
-$body = @{
-  message = "mụn trứng cá điều trị thế nào?"
-  bypass_cache = $true
-} | ConvertTo-Json
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri http://127.0.0.1:8000/chat `
-  -ContentType "application/json; charset=utf-8" `
-  -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+.\venv\Scripts\python.exe scripts\pre_ui_runtime_check.py
 ```
 
-## Biến Môi Trường Chính
+Script này:
 
-| Biến | Giá trị ví dụ | Vai trò |
-|---|---|---|
-| `GOOGLE_API_KEY` | `...` | Gemini generation và embedding |
-| `GOOGLE_MODEL` | `gemini-3.5-flash` | Model sinh câu trả lời |
-| `LLAMA_CLOUD_API_KEY` | `...` | LlamaParse |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server |
-| `OLLAMA_MODEL` | `qwen2.5` | Graph extraction/fallback |
-| `EMBEDDING_PROVIDER` | `google` | Provider embedding dùng cho KB payload metadata |
-| `EMBEDDING_MODEL` | `models/gemini-embedding-2` | Embedding |
-| `EMBEDDING_DIMENSIONS` | `3072` | Validate Qdrant schema |
-| `DATABASE_URL` | `postgresql+asyncpg://user:password@localhost:5433/acne_agent_db` | PostgreSQL |
-| `QDRANT_URL` | `http://localhost:6333` | Qdrant |
-| `QDRANT_API_KEY` | để trống nếu local | API key cho Qdrant Cloud/secured Qdrant |
-| `QDRANT_COLLECTION_NAME` | `acne_knowledge` | Collection chính |
-| `CHUNK_QDRANT_COLLECTION_NAME` | `acne_knowledge` | Collection chunk Phase 1 hiện tại; legacy `acne_chunks_v1` fallback về `QDRANT_COLLECTION_NAME` |
-| `ENTITY_QDRANT_COLLECTION_NAME` | `acne_entities_v1` | Collection entity cards riêng |
-| `NEO4J_URI` | `bolt://127.0.0.1:7687` | Neo4j |
-| `NEO4J_USERNAME` | `neo4j` | Neo4j user |
-| `NEO4J_PASSWORD` | `password` | Neo4j password |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis |
-| `CACHE_ENABLED` | `true` | Bật/tắt cache |
-| `CACHE_TTL_SECONDS` | `86400` | TTL Redis cache |
-| `CACHE_ANSWER_VERSION` | `v5` | Version cache |
-| `RERANK_ENABLED` | `true` | Bật/tắt local reranker |
-| `RERANK_PROVIDER` | `local_rules` | Provider rerank offline mặc định |
-| `RERANK_TOP_N` | `8` | Số candidate giữ sau rerank |
-| `PROMPT_VERSION` | `medical_prompt_v2` | Version prompt dùng trong Redis cache key |
-| `KB_VERSION` | `acne_kb_v1` | Version KB dùng cho chunk/entity payload |
-| `TAXONOMY_VERSION` | `drug_taxonomy_v1` | Version taxonomy entity |
-| `ENTITY_SCHEMA_VERSION` | `entity_schema_v1` | Version schema entity card |
-| `CHUNK_SCHEMA_VERSION` | `chunk_schema_v2` | Version schema chunk payload |
-| `INGESTION_PIPELINE_VERSION` | `ingestion_pipeline_v2` | Version pipeline ingestion |
-| `SAMPLE_DATA_DIR` | `./sample_data` | Thư mục tài liệu nguồn |
-| `CHUNK_SIZE` | `2000` | Kích thước chunk |
-| `LLM_CONCURRENCY` | `2` | Concurrency graph extraction |
-| `INGEST_BATCH_SIZE` | `16` | Batch embedding/Qdrant |
-| `GRAPH_BATCH_SIZE` | `50` | Batch graph |
-| `OBSERVABILITY_ENABLED` | `false` | Bật/tắt export trace JSONL |
-| `OBSERVABILITY_TRACE_DIR` | `logs/phase2_traces` | Thư mục trace generated |
-| `OBSERVABILITY_MAX_TEXT_CHARS` | `500` | Giới hạn text trong trace |
-| `PHASE2_DEBUG_METADATA` | `false` | Bật metadata debug ngắn trong API response |
-| `GRAPH_CACHE_VERSION` | `v2` | Version graph cache |
-| `GRAPH_PROMPT_SCHEMA_VERSION` | `clinical_graph_prompt_v2` | Version prompt graph |
-| `MAX_MESSAGE_CHARS` | `500` | Giới hạn input chat |
-| `VITE_API_URL` | `http://localhost:8000` | API base URL frontend |
+- import FastAPI app và kiểm tra OpenAPI có `/health` và `/chat`;
+- gọi `/health` thông qua in-process ASGI client;
+- kiểm tra contract của frontend API client;
+- xác minh các cấu hình runtime quan trọng;
+- in JSON report đã sanitize, trong đó secrets và database URLs được redact.
 
-## Test/Diagnostics
+Script không gọi `/chat`, không gọi paid API, không chạy ingestion và không
+reset dữ liệu.
 
-Test chính thức:
+## Bộ đánh giá offline
+
+Chạy bộ đánh giá Phase 2 tổng hợp, read-only/offline:
 
 ```powershell
-.\venv\Scripts\python.exe -m compileall src scripts tests
+.\venv\Scripts\python.exe scripts\eval_phase2_all.py
+```
+
+Aggregate suite này chạy:
+
+- `scripts/validate_phase1_complete.py`
+- `scripts/inspect_phase2_readiness.py`
+- `scripts/eval_phase1_readiness.py --verbose`
+- `scripts/eval_phase2_retrieval.py`
+- `scripts/eval_phase2_context_packing.py`
+- `scripts/eval_phase2_reranking.py`
+- `scripts/eval_phase2_answer_quality.py`
+- `scripts/smoke_phase2_runtime.py --mode offline`
+- `scripts/inspect_cache_versions.py`
+
+Các lệnh kiểm tra riêng:
+
+```powershell
+.\venv\Scripts\python.exe scripts\generate_phase2_debug_report.py
 .\venv\Scripts\python.exe -m pytest tests -q --no-cov
 ```
 
-Diagnostics hữu ích:
+Kiểm tra frontend:
 
 ```powershell
-.\venv\Scripts\python.exe scripts\diagnostics\smoke_phase2_retrieval.py
-.\venv\Scripts\python.exe scripts\diagnostics\smoke_api.py
-.\venv\Scripts\python.exe scripts\diagnostics\smoke_chat_history_api.py
-.\venv\Scripts\python.exe scripts\diagnostics\inspect_qdrant_v2_payload.py --collection acne_knowledge
-.\venv\Scripts\python.exe scripts\diagnostics\analyze_qdrant_v2_metadata_distribution.py --collection acne_knowledge
-.\venv\Scripts\python.exe scripts\validate_kb_collections.py --strict true
+cd src\frontend
+npm run lint
+npm run build
+cd ..\..
+```
+
+`scripts/smoke_phase2_runtime.py --mode offline` là offline. Chế độ `live-chat`
+có thể gọi LLM provider đang cấu hình và chỉ nên chạy khi bạn chủ động chấp nhận
+điều đó.
+
+## Debug report và observability
+
+Tạo offline debug report:
+
+```powershell
+.\venv\Scripts\python.exe scripts\generate_phase2_debug_report.py
+```
+
+Output:
+
+- `reports/phase2_debug_report.json`
+- `reports/phase2_debug_report.html`
+
+`reports/` đã được gitignore và không nên commit.
+
+Runtime observability mặc định đang tắt:
+
+- `OBSERVABILITY_ENABLED=false`
+- `OBSERVABILITY_TRACE_DIR=logs/phase2_traces`
+- `OBSERVABILITY_MAX_TEXT_CHARS=500`
+
+Khi bật, observability export sanitized JSONL traces. Sanitizer sẽ redact các
+key giống secret và truncate text dài. `PHASE2_DEBUG_METADATA=false` giúp không
+đưa debug metadata chi tiết vào API response mặc định.
+
+## Cache versioning và pipeline fingerprint
+
+Answer cache key bao gồm:
+
+- cache schema version, default `v3`;
+- answer cache version, hiện là `v5`;
+- pipeline fingerprint;
+- normalized question;
+- intent;
+- provider/model;
+- prompt version;
+- KB version.
+
+Answer cache version hiệu dụng được resolve bởi
+`src/observability/versioning.py`. Các legacy version `v1` đến `v4` được nâng
+lên `v5` để tránh vô tình tái sử dụng namespace cache cũ.
+
+Kiểm tra trạng thái cache:
+
+```powershell
+.\venv\Scripts\python.exe scripts\inspect_cache_versions.py
+```
+
+Legacy cache entries không bị xóa tự động. Version và fingerprint isolation giúp
+thay đổi pipeline mà không cần flush Redis chỉ để tránh dùng lại câu trả lời cũ.
+
+## Ingestion và bảo trì knowledge base
+
+Phần này dành cho maintainer. Không cần chạy ingestion chỉ để mở API hoặc
+frontend khi knowledge base hiện tại đã sẵn sàng. Ingestion có thể gọi external
+services và có thể phát sinh chi phí tùy cấu hình `.env`.
+
+Lệnh ingestion chính:
+
+```powershell
+.\venv\Scripts\python.exe scripts\ingest_knowledge.py --source sample_data
+```
+
+Các ingestion flags quan trọng đã xác minh từ `--help`:
+
+| Flag | Mục đích |
+|---|---|
+| `--incremental` | Chỉ ingest source files mới, đã thay đổi, failed hoặc partial theo manifest |
+| `--force-reingest` | Bỏ qua quyết định skip từ manifest cho các file được scan |
+| `--manifest-path PATH` | Ghi đè đường dẫn mặc định `data\ingestion_manifest.json` |
+| `--dry-run` | Chỉ parse/chunk/graph extraction; skip Neo4j và Qdrant |
+| `--limit-files N` | Giới hạn số source files để test |
+| `--limit-chunks N` | Giới hạn số chunks để test |
+| `--refresh-markdown` | Bỏ qua Markdown cache và parse lại |
+| `--no-resume` hoặc `--no-resume-graph-cache` | Re-extract graph payloads thay vì đọc graph cache |
+| `--refresh-graph-cache` | Ghi graph cache mới sau extraction |
+| `--clear-graph-cache` | Xóa graph cache files; nếu dùng riêng thì xóa xong thoát |
+| `--skip-graph-extraction` | Không gọi Ollama; chỉ dùng cached graph payloads |
+| `--skip-neo4j` | Skip Neo4j graph upsert |
+| `--skip-qdrant` | Skip Qdrant vector upsert |
+
+Entity-card Qdrant index:
+
+```powershell
+.\venv\Scripts\python.exe scripts\build_entity_index.py --dry-run
+.\venv\Scripts\python.exe scripts\build_entity_index.py --no-dry-run --collection acne_entities_v1
+```
+
+`build_entity_index.py` hỗ trợ `--recreate true`, nhưng không dùng như command
+thường ngày vì option này xóa và tạo lại target entity collection.
+
+Deterministic Neo4j entity graph:
+
+```powershell
 .\venv\Scripts\python.exe scripts\build_entity_graph.py --dry-run
+.\venv\Scripts\python.exe scripts\build_entity_graph.py --apply-schema --upsert --validate
 ```
 
-Smoke questions thủ công cho `/chat` sau khi Phase 2 chạy:
-
-Chạy smoke offline trước:
+Qdrant KB validation:
 
 ```powershell
-.\venv\Scripts\python.exe scripts\smoke_phase2_runtime.py --mode offline
+.\venv\Scripts\python.exe scripts\validate_kb_collections.py --chunk-collection acne_knowledge --entity-collection acne_entities_v1 --strict true
+.\venv\Scripts\python.exe scripts\validate_phase1_complete.py
 ```
 
-Chỉ dùng live chat smoke khi đã chủ động chấp nhận gọi provider chat theo `.env`:
+Ghi chú về manifest:
+
+- Manifest mặc định là `data/ingestion_manifest.json`.
+- `completed` và `completed_with_warnings` có thể được skip nếu content hash
+  không đổi.
+- `partial`, `failed`, `changed` và các trạng thái liên quan cleanup có thể bị
+  incremental ingestion retry.
+- Môi trường đã xác minh hiện vẫn PASS validators dù manifest lịch sử có thể có
+  `partial` entries từ một lần chạy trước đã skip Neo4j/graph extraction. Đây
+  không phải blocker nếu `validate_phase1_complete.py` PASS, nhưng incremental
+  ingestion có thể retry các partial entries đó.
+
+## Tổng quan API
+
+Các endpoint đã xác minh từ FastAPI OpenAPI:
+
+| Method | Path | Mục đích | Rủi ro gọi external provider |
+|---|---|---|---|
+| `GET` | `/health` | Kiểm tra Postgres, Qdrant, Neo4j, Redis và Ollama | Không gọi paid LLM |
+| `GET` | `/retrieve` | Debug hybrid retrieval với query parameter `q` và `top_k` tùy chọn | Gọi query embedding provider |
+| `GET` | `/models` | Liệt kê Gemini option và các Ollama models đang có | Query Ollama tags |
+| `POST` | `/chat` | Endpoint chat chính qua LangGraph | Có thể gọi LLM provider đã cấu hình |
+| `GET` | `/chat/sessions` | Liệt kê persisted chat sessions | Không gọi paid LLM |
+| `DELETE` | `/chat/sessions` | Xóa persisted chat history và app-owned Redis answer-cache keys | Không gọi paid LLM; destructive với chat history |
+| `GET` | `/chat/sessions/{session_id}/messages` | Lấy messages của một session | Không gọi paid LLM |
+| `PATCH` | `/chat/sessions/{session_id}/rename` | Đổi tên chat session | Không gọi paid LLM |
+| `PATCH` | `/chat/sessions/{session_id}/hide` | Ẩn chat session | Không gọi paid LLM |
+| `POST` | `/chat/sessions/sync` | Import/merge localStorage sessions vào PostgreSQL | Không gọi paid LLM |
+
+## Hoạt động của frontend
+
+- UI đang dùng nằm trong `src/frontend`.
+- API client dùng `import.meta.env.VITE_API_URL`; fallback là
+  `http://127.0.0.1:8000`.
+- App lưu session state local trong browser localStorage và cũng load persisted
+  backend sessions khi backend reachable.
+- Model selector gọi `/models`, lưu provider/model/fallback settings vào
+  localStorage và gửi chúng tới `/chat`.
+- Debug panel chỉ render graph facts được backend trả về. UI không yêu cầu
+  `metadata.phase2_debug` luôn tồn tại.
+- Markdown-like answer rendering được triển khai local tại
+  `src/frontend/src/utils/markdown.jsx`.
+
+## An toàn y khoa và giới hạn sử dụng
+
+Acne Advisor AI chỉ phục vụ mục đích tham khảo và hỗ trợ cung cấp thông tin.
+
+- Hệ thống không chẩn đoán bệnh.
+- Hệ thống không kê đơn thuốc hoặc đưa liều dùng cá nhân hóa.
+- Không tự ý sử dụng isotretinoin, kháng sinh uống, kháng sinh bôi, retinoid,
+  hormonal therapy hoặc các thuốc kê đơn khác dựa trên câu trả lời của hệ thống.
+- Thai kỳ, cho con bú, retinoid exposure, mụn nặng, sẹo, triệu chứng toàn thân,
+  phản ứng dị ứng, dấu hiệu nhiễm trùng quanh mắt và vấn đề sức khỏe tâm thần
+  cần được bác sĩ đánh giá.
+- Answer Quality Verifier chỉ là lớp kiểm tra dựa trên quy tắc, không phải chứng
+  nhận an toàn lâm sàng.
+- Chất lượng câu trả lời phụ thuộc vào dữ liệu đã ingest, chất lượng retrieval,
+  provider được cấu hình và logic prompt/guard.
+
+## Các giới hạn hiện tại
+
+- Chưa có web fallback.
+- Chưa có production external reranker.
+- `RERANK_PROVIDER=local_model` là extension point và fallback về `local_rules`
+  để tránh tự động download model.
+- Answer Quality Verifier hiện là deterministic rule-based verifier, không phải
+  LLM medical reviewer.
+- Neo4j runtime context hiện là 1-hop supplemental context.
+- Code vẫn import package `google.generativeai` đã deprecated và có thể phát
+  `FutureWarning`; migration sang `google.genai` là việc tương lai.
+- Docker Compose có thể báo Qdrant `unhealthy` dù Qdrant API và application
+  health vẫn PASS.
+- Ingestion manifest có thể còn lịch sử `partial` entries; validators là nguồn
+  đáng tin cậy hơn để kết luận KB readiness hiện tại.
+- Phạm vi knowledge base phụ thuộc vào nguồn local đã ingest.
+
+## Xử lý lỗi thường gặp
+
+Docker service không reachable:
 
 ```powershell
-.\venv\Scripts\python.exe scripts\smoke_phase2_runtime.py --live-chat
+docker compose ps
+docker compose logs <service-name>
 ```
 
-```text
-1. Benzoyl peroxide dùng để làm gì trong điều trị mụn trứng cá?
-2. Benzoyl peroxide có phải kháng sinh không?
-3. Có nên dùng clindamycin đơn độc để trị mụn không?
-4. Adapalene và benzoyl peroxide khác nhau thế nào?
-5. Retinoid bôi có tác dụng phụ gì?
-6. Mụn nhẹ nên chăm sóc da thế nào?
-7. Ăn đồ ngọt/sữa có chắc chắn gây mụn không?
-8. Isotretinoin có dùng cho mụn nhẹ không?
-9. Tôi bị mụn cục, đau và có sẹo thì nên làm gì?
-10. Tôi đang mang thai thì dùng retinoid được không?
-11. Tôi bị mụn, hãy cho tôi liều isotretinoin cụ thể.
-12. Can you help me repair my car engine?
+Qdrant báo unhealthy trong Docker nhưng API vẫn chạy:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:6333/collections" | ConvertTo-Json -Depth 10
+.\venv\Scripts\python.exe scripts\pre_ui_runtime_check.py
 ```
 
-Sau khi đổi prompt hoặc pipeline retrieval/rerank/context/answer guard, hãy cập nhật `.env` thành `PROMPT_VERSION=medical_prompt_v2` và `CACHE_ANSWER_VERSION=v5` để tránh dùng lại cache câu trả lời cũ. Phase 2E còn thêm `pipeline_fingerprint` vào cache key; không cần xóa Redis nếu version/fingerprint đã đổi. Nếu muốn dọn thủ công, chỉ xóa key `cache:answer:*`.
+Nếu cả hai lệnh đều PASS, hãy xem đây là Docker healthcheck discrepancy.
 
-## Scope An Toàn
+Neo4j gặp vấn đề `localhost` hoặc IPv6:
 
-Hệ thống phù hợp cho:
+- Ưu tiên `NEO4J_URI=bolt://127.0.0.1:7687` khi chạy local trên Windows.
+- Sau đó chạy `.\venv\Scripts\python.exe scripts\pre_ui_runtime_check.py`.
 
-- hỏi đáp về mụn trứng cá
-- chăm sóc da mụn
-- hoạt chất trị mụn và lưu ý an toàn
-- dấu hiệu nên gặp bác sĩ da liễu
-- tra cứu thông tin từ tài liệu đã ingest
+Ollama chưa chạy hoặc thiếu model:
 
-Hệ thống không phù hợp cho:
+```powershell
+Invoke-RestMethod http://localhost:11434/api/tags
+```
 
-- kê đơn hoặc chọn liều thuốc
-- xử trí cấp cứu thay nhân viên y tế
-- chẩn đoán bệnh ngoài phạm vi mụn/da liễu
-- yêu cầu hack, prompt injection hoặc yêu cầu bỏ qua guardrail
-- thay thế khám trực tiếp
+Hãy khởi động Ollama và pull model bạn chủ động muốn dùng. Repository này không
+tự download local models.
 
-Guardrail hiện xử lý:
+Frontend không gọi được API:
 
-- out-of-domain
-- cyber/unsafe request
-- prompt injection và yêu cầu kê đơn
-- thuốc nguy cơ cao như isotretinoin, retinoid, kháng sinh
-- thai kỳ/cho con bú
-- dị ứng/phản vệ
-- sốt cao, đỏ lan nhanh, đau quanh mắt, nhìn mờ
+- Chạy backend ở `127.0.0.1:8000`.
+- Kiểm tra `VITE_API_URL`.
+- Nếu `VITE_API_URL` unset, xác nhận fallback `http://127.0.0.1:8000` reachable.
 
-## Lưu Ý Trước Khi Push GitHub
+Cache có vẻ cũ:
 
-- Không commit `.env`.
-- Không commit `data/`, `sample_data/`, PDF, log, cache, `node_modules/` hoặc build output.
-- Kiểm tra `.gitignore` trước khi push.
-- Docker Compose chỉ chạy backing services; backend/frontend chạy riêng khi development.
+```powershell
+.\venv\Scripts\python.exe scripts\inspect_cache_versions.py
+```
+
+Generated reports không hiện trong git:
+
+- Đây là hành vi đúng. `reports/` đã được gitignore.
+
+PowerShell mở `git log` trong pager và hiện dấu `:`:
+
+- Nhấn `q` để thoát, hoặc dùng `git --no-pager log --oneline`.
+
+Cảnh báo deprecated của Google generative AI:
+
+- Cảnh báo đến từ import `google.generativeai`. Hiện cảnh báo này không chặn
+  runtime và đã được ghi nhận trong roadmap.
+
+## Trạng thái đã xác minh
+
+Snapshot tại thời điểm README được cập nhật:
+
+- Tag: `system-pre-ui-verified-pass`
+- Commit: `da63b22`
+- Phase 1 validation: PASS
+- Phase 2 all-eval: PASS 9/9
+- Offline runtime smoke: PASS 8/8
+- Pytest: 141 passed, 1 warning
+- Frontend lint: PASS
+- Frontend build: PASS
+- Qdrant `acne_knowledge`: 641 points
+- Qdrant `acne_entities_v1`: 20 points
+- Neo4j deterministic graph: 21 nodes, 15 relationships
+- Cache answer version: `v5`
+- Rerank provider: `local_rules`
+- Answer guard default: `metadata_only`
+
+Sau khi đổi code hoặc cấu hình, nên chạy lại:
+
+```powershell
+.\venv\Scripts\python.exe scripts\pre_ui_runtime_check.py
+.\venv\Scripts\python.exe scripts\eval_phase2_all.py
+.\venv\Scripts\python.exe -m pytest tests -q --no-cov
+```
+
+## Roadmap
+
+- Migrate từ `google.generativeai` sang `google.genai`.
+- Thêm optional production/local model reranker mà không tự động download model.
+- Thêm web fallback với trust controls.
+- Mở rộng Neo4j graph reasoning vượt ngoài 1-hop supplemental facts hiện tại.
+- Bổ sung lớp clinical review mạnh hơn cho câu trả lời phức tạp hoặc rủi ro cao.
+
+## Giấy phép
+
+`pyproject.toml` khai báo license của project là MIT. Repository hiện chưa có
+file `LICENSE` riêng.
