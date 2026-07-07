@@ -1,5 +1,3 @@
-import React from 'react';
-
 const SUGGESTED_QUESTIONS = [
   {
     title: 'Tư vấn mụn theo triệu chứng',

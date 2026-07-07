@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import { useRef, useEffect } from 'react';
 import ChatMessage from './ChatMessage.jsx';
 import EmptyState from './EmptyState.jsx';
 import ChatInput from './ChatInput.jsx';
@@ -12,7 +12,6 @@ export default function ChatWindow({
   setMessage,
   onSubmit,
   onSendQuestion,
-  sidebarOpen,
   onToggleSidebar,
 }) {
   const messagesEndRef = useRef(null);

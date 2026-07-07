@@ -1,23 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { fetchModels } from '../api/chatApi.js';
 
 export default function ModelSelector({ onModelConfigChange }) {
   const [models, setModels] = useState([]);
-  const [selectedProvider, setSelectedProvider] = useState('gemini');
-  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
-  const [allowFallback, setAllowFallback] = useState(true);
+  const [selectedProvider, setSelectedProvider] = useState(
+    () => localStorage.getItem('acneAdvisorSelectedProvider') || 'gemini'
+  );
+  const [selectedModel, setSelectedModel] = useState(
+    () => localStorage.getItem('acneAdvisorSelectedModel') || 'gemini-2.5-flash'
+  );
+  const [allowFallback, setAllowFallback] = useState(
+    () => localStorage.getItem('acneAdvisorAllowModelFallback') !== 'false'
+  );
   const [loading, setLoading] = useState(true);
-
-  // Read from localStorage on mount
-  useEffect(() => {
-    const savedProvider = localStorage.getItem('acneAdvisorSelectedProvider');
-    const savedModel = localStorage.getItem('acneAdvisorSelectedModel');
-    const savedFallback = localStorage.getItem('acneAdvisorAllowModelFallback');
-
-    if (savedProvider) setSelectedProvider(savedProvider);
-    if (savedModel) setSelectedModel(savedModel);
-    if (savedFallback !== null) setAllowFallback(savedFallback === 'true');
-  }, []);
 
   // Fetch models from API
   useEffect(() => {

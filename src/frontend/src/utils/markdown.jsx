@@ -1,5 +1,3 @@
-import React from 'react';
-
 /**
  * Simple markdown-like text formatter.
  * Converts basic markdown patterns to React elements.
