@@ -7,7 +7,6 @@ external APIs.
 from __future__ import annotations
 
 import re
-import unicodedata
 from typing import Any
 
 from src.retrieval.contracts import NormalizedQuery, PackedContext, RetrievalTrace
@@ -16,7 +15,13 @@ from src.quality.contracts import (
     AnswerGuardResult,
     AnswerQualityIssue,
     AnswerVerificationReport,
+    DomainProposition,
 )
+from src.quality.proposition_detector import (
+    extract_domain_propositions,
+    proposition_exists,
+)
+from src.quality.vietnamese_text import build_matching_views
 
 
 CRITICAL = "critical"
@@ -37,18 +42,19 @@ def verify_answer_quality(
     answer = answer or ""
     query_norm = _norm(query)
     answer_norm = _norm(answer)
+    propositions = extract_domain_propositions(answer, query_context=query)
     issues: list[AnswerQualityIssue] = []
     required: list[str] = []
     detected: list[str] = []
     contradictions: list[str] = []
     safety_warnings: list[str] = []
 
-    _check_bp_antibiotic(query_norm, answer_norm, issues, required, detected, contradictions)
-    _check_clindamycin_retinoid(query_norm, answer_norm, issues, required, detected, contradictions)
-    _check_adapalene_antibiotic(query_norm, answer_norm, issues, required, detected, contradictions)
-    _check_dalacin_identity(query_norm, answer_norm, issues, required, detected, contradictions)
-    _check_epiduo_ingredients(query_norm, answer_norm, issues, required, detected, contradictions)
-    _check_differin_class(query_norm, answer_norm, issues, required, detected, contradictions)
+    _check_bp_antibiotic(query_norm, answer_norm, propositions, issues, required, detected, contradictions)
+    _check_clindamycin_retinoid(query_norm, answer_norm, propositions, issues, required, detected, contradictions)
+    _check_adapalene_antibiotic(query_norm, answer_norm, propositions, issues, required, detected, contradictions)
+    _check_dalacin_identity(query_norm, answer_norm, propositions, issues, required, detected, contradictions)
+    _check_epiduo_ingredients(query_norm, answer_norm, propositions, issues, required, detected, contradictions)
+    _check_differin_class(query_norm, answer_norm, propositions, issues, required, detected, contradictions)
     _check_topical_antibiotic_caution(query_norm, answer_norm, issues, safety_warnings)
     _check_retinoid_pregnancy_safety(query_norm, answer_norm, issues, contradictions, safety_warnings)
     _check_isotretinoin_safety(answer_norm, issues, contradictions, safety_warnings)
@@ -82,6 +88,11 @@ def verify_answer_quality(
         metadata={
             "packed_context_items": len(packed_context.items) if packed_context else 0,
             "retrieval_trace_available": retrieval_trace is not None,
+            "answer_verifier": {
+                "version": "answer_verifier_v2",
+                "proposition_count": len(propositions),
+                "proposition_rules": _proposition_rule_counts(propositions),
+            },
             "normalized_entities": {
                 "drug_product": normalized_query.drug_product,
                 "active_ingredient": normalized_query.active_ingredient,
@@ -149,6 +160,7 @@ def apply_answer_guard(
 def _check_bp_antibiotic(
     query: str,
     answer: str,
+    propositions: list[DomainProposition],
     issues: list[AnswerQualityIssue],
     required: list[str],
     detected: list[str],
@@ -159,82 +171,104 @@ def _check_bp_antibiotic(
     if "khang sinh" not in query and "antibiotic" not in query:
         return
     required.append("benzoyl peroxide is not an antibiotic")
-    if _contains_any(answer, ["khong phai khang sinh", "not an antibiotic", "khong la khang sinh"]):
+    if _has_prop(propositions, "benzoyl_peroxide", "is_not_a", "antibiotic"):
         detected.append("benzoyl peroxide is not an antibiotic")
-    if _contains_any(answer, ["benzoyl peroxide la khang sinh", "bpo la khang sinh", "benzoyl peroxide is an antibiotic"]):
+    if _has_prop(propositions, "benzoyl_peroxide", "is_a", "antibiotic"):
         contradictions.append("benzoyl peroxide incorrectly described as antibiotic")
-        issues.append(_issue("bp_antibiotic_contradiction", CRITICAL, "Benzoyl peroxide was described as an antibiotic."))
+        issues.append(
+            _issue(
+                "bp_antibiotic_contradiction",
+                CRITICAL,
+                "Benzoyl peroxide was described as an antibiotic.",
+                evidence=_evidence_for(propositions, "benzoyl_peroxide", "is_a", "antibiotic"),
+            )
+        )
     elif "benzoyl peroxide" not in answer and "bpo" not in answer:
-        issues.append(_issue("bp_missing_direct_entity", ERROR, "Answer does not directly address benzoyl peroxide."))
+        if "benzoyl peroxide is not an antibiotic" not in detected:
+            issues.append(_issue("bp_missing_direct_entity", ERROR, "Answer does not directly address benzoyl peroxide."))
     elif "benzoyl peroxide is not an antibiotic" not in detected:
         issues.append(_issue("bp_missing_not_antibiotic", ERROR, "Answer should say benzoyl peroxide is not an antibiotic."))
 
 
-def _check_clindamycin_retinoid(query: str, answer: str, issues: list[AnswerQualityIssue], required: list[str], detected: list[str], contradictions: list[str]) -> None:
-    if "clindamycin" not in query or "retinoid" not in query:
+def _check_clindamycin_retinoid(query: str, answer: str, propositions: list[DomainProposition], issues: list[AnswerQualityIssue], required: list[str], detected: list[str], contradictions: list[str]) -> None:
+    if not _contains_any(query, ["clindamycin", "dalacin"]) or "retinoid" not in query:
         return
     required.extend(["clindamycin is not a retinoid", "clindamycin is a topical antibiotic"])
-    if _contains_any(answer, ["khong phai retinoid", "not a retinoid"]):
+    if _has_prop(propositions, "clindamycin", "is_not_a", "retinoid"):
         detected.append("clindamycin is not a retinoid")
-    if _contains_any(answer, ["khang sinh boi", "topical antibiotic", "topical_antibiotic"]):
+    if _has_prop(propositions, "clindamycin", "is_a", "topical_antibiotic") or _contains_any(answer, ["khang sinh boi", "topical antibiotic", "topical_antibiotic"]):
         detected.append("clindamycin is a topical antibiotic")
-    if _contains_any(answer, ["clindamycin la retinoid", "clindamycin is a retinoid"]):
+    if _has_prop(propositions, "clindamycin", "is_a", "retinoid"):
         contradictions.append("clindamycin incorrectly described as retinoid")
-        issues.append(_issue("clindamycin_retinoid_contradiction", CRITICAL, "Clindamycin was described as a retinoid."))
+        issues.append(
+            _issue(
+                "clindamycin_retinoid_contradiction",
+                CRITICAL,
+                "Clindamycin was described as a retinoid.",
+                evidence=_evidence_for(propositions, "clindamycin", "is_a", "retinoid"),
+            )
+        )
 
 
-def _check_adapalene_antibiotic(query: str, answer: str, issues: list[AnswerQualityIssue], required: list[str], detected: list[str], contradictions: list[str]) -> None:
-    if "adapalene" not in query or ("khang sinh" not in query and "antibiotic" not in query):
+def _check_adapalene_antibiotic(query: str, answer: str, propositions: list[DomainProposition], issues: list[AnswerQualityIssue], required: list[str], detected: list[str], contradictions: list[str]) -> None:
+    if not _contains_any(query, ["adapalene", "differin"]) or ("khang sinh" not in query and "antibiotic" not in query):
         return
     required.extend(["adapalene is not an antibiotic", "adapalene is a topical retinoid"])
-    if _contains_any(answer, ["khong phai khang sinh", "not an antibiotic"]):
+    if _has_prop(propositions, "adapalene", "is_not_a", "antibiotic"):
         detected.append("adapalene is not an antibiotic")
-    if _contains_any(answer, ["retinoid boi", "topical retinoid", "topical_retinoid"]):
+    if _has_prop(propositions, "adapalene", "is_a", "retinoid") or _contains_any(answer, ["retinoid boi", "topical retinoid", "topical_retinoid"]):
         detected.append("adapalene is a topical retinoid")
-    if _contains_any(answer, ["adapalene la khang sinh", "adapalene la antibiotic", "adapalene is an antibiotic"]):
+    if _has_prop(propositions, "adapalene", "is_a", "antibiotic"):
         contradictions.append("adapalene incorrectly described as antibiotic")
-        issues.append(_issue("adapalene_antibiotic_contradiction", CRITICAL, "Adapalene was described as an antibiotic."))
+        issues.append(
+            _issue(
+                "adapalene_antibiotic_contradiction",
+                CRITICAL,
+                "Adapalene was described as an antibiotic.",
+                evidence=_evidence_for(propositions, "adapalene", "is_a", "antibiotic"),
+            )
+        )
 
 
-def _check_dalacin_identity(query: str, answer: str, issues: list[AnswerQualityIssue], required: list[str], detected: list[str], contradictions: list[str]) -> None:
+def _check_dalacin_identity(query: str, answer: str, propositions: list[DomainProposition], issues: list[AnswerQualityIssue], required: list[str], detected: list[str], contradictions: list[str]) -> None:
     if "dalacin" not in query:
         return
     required.extend(["Dalacin T contains clindamycin", "Dalacin T is a topical antibiotic"])
-    if "clindamycin" in answer:
+    if _has_prop(propositions, "Dalacin T", "contains", "clindamycin") or "clindamycin" in answer:
         detected.append("Dalacin T contains clindamycin")
-    if _contains_any(answer, ["khang sinh boi", "topical antibiotic", "topical_antibiotic"]):
+    if _has_prop(propositions, "clindamycin", "is_a", "topical_antibiotic") or _contains_any(answer, ["khang sinh boi", "topical antibiotic", "topical_antibiotic"]):
         detected.append("Dalacin T is a topical antibiotic")
-    if _contains_any(answer, ["dalacin t la retinoid", "dalacin la retinoid", "dalacin t is a retinoid"]):
+    if _has_prop(propositions, "clindamycin", "is_a", "retinoid"):
         contradictions.append("Dalacin T incorrectly described as retinoid")
         issues.append(_issue("dalacin_retinoid_contradiction", CRITICAL, "Dalacin T was described as a retinoid."))
 
 
-def _check_epiduo_ingredients(query: str, answer: str, issues: list[AnswerQualityIssue], required: list[str], detected: list[str], contradictions: list[str]) -> None:
+def _check_epiduo_ingredients(query: str, answer: str, propositions: list[DomainProposition], issues: list[AnswerQualityIssue], required: list[str], detected: list[str], contradictions: list[str]) -> None:
     if "epiduo" not in query:
         return
     if not _contains_any(query, ["bpo", "thanh phan", "co benzoyl", "co bpo", "ingredient"]):
         return
     required.extend(["Epiduo contains adapalene", "Epiduo contains benzoyl peroxide"])
-    if "adapalene" in answer:
+    if _has_prop(propositions, "Epiduo", "contains", "adapalene") or "adapalene" in answer:
         detected.append("Epiduo contains adapalene")
-    if "benzoyl peroxide" in answer or "bpo" in answer:
+    if _has_prop(propositions, "Epiduo", "contains", "benzoyl_peroxide") or "benzoyl peroxide" in answer or "bpo" in answer:
         detected.append("Epiduo contains benzoyl peroxide")
-    if _contains_any(answer, ["benzoyl peroxide la khang sinh", "benzoyl peroxide is an antibiotic"]):
+    if _has_prop(propositions, "benzoyl_peroxide", "is_a", "antibiotic"):
         contradictions.append("benzoyl peroxide incorrectly described as antibiotic")
         issues.append(_issue("epiduo_bp_antibiotic_contradiction", CRITICAL, "Epiduo answer calls benzoyl peroxide an antibiotic."))
     if ("adapalene" in answer) ^ ("benzoyl peroxide" in answer or "bpo" in answer):
         issues.append(_issue("epiduo_incomplete_ingredients", WARNING, "Epiduo ingredient answer mentions only one key ingredient."))
 
 
-def _check_differin_class(query: str, answer: str, issues: list[AnswerQualityIssue], required: list[str], detected: list[str], contradictions: list[str]) -> None:
+def _check_differin_class(query: str, answer: str, propositions: list[DomainProposition], issues: list[AnswerQualityIssue], required: list[str], detected: list[str], contradictions: list[str]) -> None:
     if "differin" not in query:
         return
     required.extend(["Differin contains adapalene", "Differin is a topical retinoid"])
-    if "adapalene" in answer:
+    if _has_prop(propositions, "Differin", "contains", "adapalene") or "adapalene" in answer:
         detected.append("Differin contains adapalene")
-    if _contains_any(answer, ["retinoid boi", "topical retinoid", "topical_retinoid"]):
+    if _has_prop(propositions, "adapalene", "is_a", "retinoid") or _contains_any(answer, ["retinoid boi", "topical retinoid", "topical_retinoid"]):
         detected.append("Differin is a topical retinoid")
-    if _contains_any(answer, ["differin la khang sinh", "differin is an antibiotic"]):
+    if _has_prop(propositions, "adapalene", "is_a", "antibiotic"):
         contradictions.append("Differin incorrectly described as antibiotic")
         issues.append(_issue("differin_antibiotic_contradiction", CRITICAL, "Differin was described as an antibiotic."))
 
@@ -338,11 +372,32 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 def _norm(text: str) -> str:
-    text = unicodedata.normalize("NFD", text or "")
-    text = "".join(char for char in text if unicodedata.category(char) != "Mn")
-    text = text.replace("đ", "d").replace("Đ", "D")
-    text = re.sub(r"\s+", " ", text.lower()).strip()
-    return text
+    _, accentless = build_matching_views(text)
+    return accentless
+
+
+def _has_prop(propositions: list[DomainProposition], subject: str, relation: str, object_: str) -> bool:
+    return proposition_exists(propositions, subject=subject, relation=relation, object_=object_)
+
+
+def _evidence_for(propositions: list[DomainProposition], subject: str, relation: str, object_: str) -> dict[str, Any]:
+    for proposition in propositions:
+        if proposition_exists([proposition], subject=subject, relation=relation, object_=object_):
+            return {
+                "matched_subject": proposition.subject,
+                "matched_predicate": proposition.object,
+                "matched_clause": proposition.matched_text[:200],
+                "source_rule": proposition.source_rule,
+                "normalized_clause": proposition.normalized_text[:200],
+            }
+    return {}
+
+
+def _proposition_rule_counts(propositions: list[DomainProposition]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for proposition in propositions:
+        counts[proposition.source_rule] = counts.get(proposition.source_rule, 0) + 1
+    return counts
 
 
 __all__ = ["apply_answer_guard", "verify_answer_quality"]
