@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 from src.agent.main import run_clinical_agent
 from src.agent.text_encoding import repair_mojibake
+from src.observability.versioning import get_answer_cache_version
 
 # Input Control Config
 MAX_MESSAGE_CHARS = int(os.getenv("MAX_MESSAGE_CHARS", 500))
@@ -34,7 +35,7 @@ MAX_MESSAGE_WORDS = int(os.getenv("MAX_MESSAGE_WORDS", 120))
 MAX_QUESTION_MARKS = int(os.getenv("MAX_QUESTION_MARKS", 3))
 MAX_CONVERSATION_HISTORY_MESSAGES = int(os.getenv("MAX_CONVERSATION_HISTORY_MESSAGES", 10))
 MAX_HISTORY_MESSAGE_CHARS = int(os.getenv("MAX_HISTORY_MESSAGE_CHARS", 1000))
-CACHE_ANSWER_VERSION = os.getenv("CACHE_ANSWER_VERSION", "v4")
+CACHE_ANSWER_VERSION = get_answer_cache_version()
 
 # In-memory lock for session requests
 active_requests = set()
@@ -104,6 +105,7 @@ class ChatCacheMetadata(BaseModel):
     quality_checked: Optional[bool] = None
     quality_passed: Optional[bool] = None
     quality_reason: Optional[str] = None
+    pipeline_fingerprint: Optional[str] = None
 
 class ChatMetadata(BaseModel):
     provider: str
@@ -123,6 +125,7 @@ class ChatMetadata(BaseModel):
     cached_from_provider: Optional[str] = None
     cached_from_model: Optional[str] = None
     cached_at: Optional[str] = None
+    phase2_debug: Optional[dict[str, Any]] = None
 
 class ChatResponse(BaseModel):
     answer: str
@@ -515,6 +518,25 @@ async def chat_endpoint(request: ChatRequest):
         symptoms_list = result.get("symptoms", [])
         safety_flags_list = result.get("safety_flags", [])
         answer_quality_report = result.get("answer_quality_report") or {}
+        pipeline_fingerprint = result.get("pipeline_fingerprint")
+        pipeline_manifest = result.get("pipeline_manifest") or {}
+        phase2_debug_enabled = os.getenv("PHASE2_DEBUG_METADATA", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        phase2_debug = None
+        if phase2_debug_enabled:
+            phase2_debug = {
+                "pipeline_fingerprint": pipeline_fingerprint,
+                "pipeline_phase": pipeline_manifest.get("phase") if isinstance(pipeline_manifest, dict) else None,
+                "observability_exported": result.get("observability_exported"),
+                "answer_quality": {
+                    "passed": answer_quality_report.get("passed") if isinstance(answer_quality_report, dict) else None,
+                    "issue_count": len(answer_quality_report.get("issues", [])) if isinstance(answer_quality_report, dict) else 0,
+                },
+            }
         
         # Build safe metadata dict for DB storage (no API keys, no raw exceptions)
         safe_db_metadata = {
@@ -527,6 +549,14 @@ async def chat_endpoint(request: ChatRequest):
             "is_in_domain": is_in_domain,
             "guardrail": result.get("guardrail"),
             "used_retrieval": used_retrieval,
+            "pipeline_fingerprint": pipeline_fingerprint,
+            "pipeline_manifest": {
+                "phase": pipeline_manifest.get("phase") if isinstance(pipeline_manifest, dict) else None,
+                "answer_cache_version": pipeline_manifest.get("answer_cache_version") if isinstance(pipeline_manifest, dict) else None,
+                "rerank_provider": pipeline_manifest.get("rerank_provider") if isinstance(pipeline_manifest, dict) else None,
+                "answer_guard_mode": pipeline_manifest.get("answer_guard_mode") if isinstance(pipeline_manifest, dict) else None,
+            },
+            "observability_exported": result.get("observability_exported"),
             "answer_quality": {
                 "checked": bool(answer_quality_report),
                 "passed": answer_quality_report.get("passed") if isinstance(answer_quality_report, dict) else None,
@@ -549,6 +579,7 @@ async def chat_endpoint(request: ChatRequest):
                 "hit": bool(result.get("cache_hit")),
                 "reason": result.get("cache_reason") if result.get("cache_checked") or result.get("cache_reason") == "bypassed" else ("out_of_domain" if not is_in_domain else "skipped"),
                 "answer_version": result.get("cache_metadata", {}).get("answer_version") if result.get("cache_hit") else CACHE_ANSWER_VERSION,
+                "pipeline_fingerprint": result.get("cache_metadata", {}).get("pipeline_fingerprint") if result.get("cache_hit") else pipeline_fingerprint,
                 "quality_checked": result.get("cache_metadata", {}).get("quality_checked") if result.get("cache_hit") else None,
                 "quality_passed": result.get("cache_metadata", {}).get("quality_passed") if result.get("cache_hit") else None,
                 "quality_reason": result.get("cache_metadata", {}).get("quality_reason") if result.get("cache_hit") else None
@@ -610,13 +641,15 @@ async def chat_endpoint(request: ChatRequest):
                     hit=bool(result.get("cache_hit")),
                     reason=result.get("cache_reason") if result.get("cache_checked") or result.get("cache_reason") == "bypassed" else ("out_of_domain" if not is_in_domain else "skipped"),
                     answer_version=result.get("cache_metadata", {}).get("answer_version") if result.get("cache_hit") else CACHE_ANSWER_VERSION,
+                    pipeline_fingerprint=result.get("cache_metadata", {}).get("pipeline_fingerprint") if result.get("cache_hit") else pipeline_fingerprint,
                     quality_checked=result.get("cache_metadata", {}).get("quality_checked") if result.get("cache_hit") else None,
                     quality_passed=result.get("cache_metadata", {}).get("quality_passed") if result.get("cache_hit") else None,
                     quality_reason=result.get("cache_metadata", {}).get("quality_reason") if result.get("cache_hit") else None
                 ),
                 cached_from_provider=cached_from_provider,
                 cached_from_model=cached_from_model,
-                cached_at=cached_at
+                cached_at=cached_at,
+                phase2_debug=phase2_debug
             )
         )
         

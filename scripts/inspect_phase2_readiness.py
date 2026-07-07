@@ -34,6 +34,7 @@ from src.knowledge.entity_index import (  # noqa: E402
     get_entity_collection_name,
 )
 from src.knowledge.versioning import get_embedding_metadata  # noqa: E402
+from src.observability.versioning import get_answer_cache_version  # noqa: E402
 from src.retrieval.reranker import rerank_provider_from_env  # noqa: E402
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -199,8 +200,15 @@ def inspect_runtime_code() -> dict[str, Any]:
     answer_verifier_path = PROJECT_ROOT / "src" / "quality" / "answer_verifier.py"
     answer_quality_eval_path = PROJECT_ROOT / "scripts" / "eval_phase2_answer_quality.py"
     runtime_smoke_path = PROJECT_ROOT / "scripts" / "smoke_phase2_runtime.py"
+    cache_versioning_path = PROJECT_ROOT / "src" / "observability" / "versioning.py"
+    observability_exporter_path = PROJECT_ROOT / "src" / "observability" / "trace_exporter.py"
+    debug_report_path = PROJECT_ROOT / "scripts" / "generate_phase2_debug_report.py"
+    all_eval_path = PROJECT_ROOT / "scripts" / "eval_phase2_all.py"
+    cache_inspect_path = PROJECT_ROOT / "scripts" / "inspect_cache_versions.py"
     answer_verifier_source = answer_verifier_path.read_text(encoding="utf-8") if answer_verifier_path.exists() else ""
     runtime_smoke_source = runtime_smoke_path.read_text(encoding="utf-8") if runtime_smoke_path.exists() else ""
+    cache_versioning_source = cache_versioning_path.read_text(encoding="utf-8") if cache_versioning_path.exists() else ""
+    observability_exporter_source = observability_exporter_path.read_text(encoding="utf-8") if observability_exporter_path.exists() else ""
 
     return {
         "current_capabilities": {
@@ -234,6 +242,14 @@ def inspect_runtime_code() -> dict[str, Any]:
             "runtime_smoke_available": runtime_smoke_path.exists(),
             "offline_smoke_available": "def run_offline_smoke" in runtime_smoke_source
             and "--live-chat" in runtime_smoke_source,
+            "cache_versioning_available": "build_pipeline_version_manifest" in cache_versioning_source
+            and "compute_pipeline_fingerprint" in cache_versioning_source,
+            "pipeline_fingerprint_available": "pipeline_fingerprint" in cache_versioning_source,
+            "observability_available": "sanitize_for_observability" in observability_exporter_source
+            and "export_observability_event" in observability_exporter_source,
+            "cache_inspection_available": cache_inspect_path.exists(),
+            "debug_report_available": debug_report_path.exists(),
+            "phase2_all_eval_available": all_eval_path.exists(),
         },
         "rerank_provider_default": _display_rerank_provider(),
         "deferred_phase2_features": [
@@ -263,7 +279,7 @@ async def main() -> int:
         "embedding": get_embedding_metadata(),
         "kb_version": os.getenv("KB_VERSION", "acne_kb_v1"),
         "prompt_version": os.getenv("PROMPT_VERSION", "medical_prompt_v2"),
-        "cache_answer_version": os.getenv("CACHE_ANSWER_VERSION", "v4"),
+        "cache_answer_version": get_answer_cache_version(),
     }
 
     qdrant, neo4j = await asyncio.gather(inspect_qdrant(), inspect_neo4j())
