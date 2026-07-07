@@ -34,6 +34,7 @@ from src.knowledge.entity_index import (  # noqa: E402
     get_entity_collection_name,
 )
 from src.knowledge.versioning import get_embedding_metadata  # noqa: E402
+from src.retrieval.reranker import rerank_provider_from_env  # noqa: E402
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -193,9 +194,13 @@ def inspect_runtime_code() -> dict[str, Any]:
     entity_retriever_source = (PROJECT_ROOT / "src" / "retrieval" / "entity_retriever.py").read_text(encoding="utf-8")
     query_normalization_source = (PROJECT_ROOT / "src" / "retrieval" / "query_normalization.py").read_text(encoding="utf-8")
     context_packer_source = (PROJECT_ROOT / "src" / "retrieval" / "context_packer.py").read_text(encoding="utf-8")
+    reranker_source = (PROJECT_ROOT / "src" / "retrieval" / "reranker.py").read_text(encoding="utf-8")
 
     return {
         "current_capabilities": {
+            "entity_aware_retrieval": "EntityRetriever" in retriever_source
+            and "normalize_query" in retriever_source
+            and "expand_normalized_query" in retriever_source,
             "qdrant_dense_search": "dense_results = await self._vector_store.search(" in retriever_source,
             "qdrant_sparse_bm25_search": "search_sparse" in retriever_source,
             "rrf_fusion": "rrf_fusion" in retriever_source,
@@ -211,14 +216,28 @@ def inspect_runtime_code() -> dict[str, Any]:
             "candidate_merge_trace": "RetrievalTrace" in retriever_source,
             "entity_aware_context_packing": "pack_context" in retriever_source
             and "PackedContext" in context_packer_source,
+            "local_reranker_available": "def rerank_candidates" in reranker_source
+            and "local_rules" in reranker_source,
+            "reranking_integrated": "rerank_candidates" in retriever_source
+            and "rerank_trace" in retriever_source,
         },
+        "rerank_provider_default": _display_rerank_provider(),
         "deferred_phase2_features": [
-            "Add production reranking over merged entity/chunk candidates.",
+            "Add external rerank provider or installed local model reranker.",
             "Add advanced medical answer verifier over generated answers.",
             "Use deterministic Neo4j graph for deeper structured expansion beyond 1-hop supplemental facts.",
             "Web fallback is intentionally not implemented.",
         ],
     }
+
+
+def _display_rerank_provider() -> str:
+    provider = rerank_provider_from_env().strip().lower()
+    if provider in {"", "local", "local_rules"}:
+        return "local_rules"
+    if provider == "local_model":
+        return "local_model (fallbacks to local_rules when unavailable)"
+    return f"{provider} (unknown; runtime falls back to local_rules)"
 
 
 async def main() -> int:
@@ -241,7 +260,7 @@ async def main() -> int:
         "runtime_config": runtime_config,
         "phase1_state_checks": checks,
         **runtime_code,
-        "recommended_next_step": "Phase 2C: production reranking, answer verification, and deeper deterministic Neo4j expansion.",
+        "recommended_next_step": "Phase 2D: answer verification, optional external/local-model reranker, and deeper deterministic Neo4j expansion.",
     }
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     return 0 if report["passed"] else 1

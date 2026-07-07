@@ -26,12 +26,18 @@ from typing import Any
 from src.database.graph_store import Neo4jGraphStore
 from src.database.vector_store import QdrantVectorStore, embed_query
 from src.retrieval.candidate_merge import candidate_debug_summary, merge_candidates
-from src.retrieval.contracts import RetrievalTrace
+from src.retrieval.contracts import RerankTrace, RetrievalTrace
 from src.retrieval.context_packer import pack_context, packed_context_to_legacy_contexts
 from src.retrieval.entity_retriever import EntityRetriever
 from src.retrieval.metadata_boost import boost_chunk_results
 from src.retrieval.query_expansion import expand_normalized_query
 from src.retrieval.query_normalization import normalize_query
+from src.retrieval.reranker import (
+    rerank_candidates,
+    rerank_enabled_from_env,
+    rerank_provider_from_env,
+    rerank_top_n_from_env,
+)
 
 # Phase 1.5 — Dermatology-aware query boost
 from src.ingestion.domain_metadata import extract_dermatology_metadata
@@ -358,15 +364,40 @@ class HybridRetriever:
             normalized_query=normalized_query,
             limit=max(top_k * 2, 8),
         )
+        t_rerank_start = time.time()
+        rerank_top_n = rerank_top_n_from_env(default=max(top_k * 2, 8))
+        if rerank_enabled_from_env():
+            reranked_candidates, rerank_trace = rerank_candidates(
+                normalized_query=normalized_query,
+                candidates=merged_candidates,
+                expansion=expansion,
+                top_n=rerank_top_n,
+                provider=rerank_provider_from_env(),
+            )
+        else:
+            reranked_candidates = merged_candidates
+            rerank_trace = RerankTrace(
+                provider=rerank_provider_from_env(),
+                enabled=False,
+                input_count=len(merged_candidates),
+                output_count=len(merged_candidates),
+                top_n=rerank_top_n,
+                ranked_candidates=[],
+                warnings=["Reranker disabled by RERANK_ENABLED=false."],
+                timings_ms={},
+            )
+        t_rerank = time.time() - t_rerank_start
+        warnings.extend(rerank_trace.warnings)
+
         t_pack_start = time.time()
         packed_context = pack_context(
             normalized_query=normalized_query,
-            merged_candidates=merged_candidates,
+            merged_candidates=reranked_candidates,
             max_items=max(top_k, 5),
             max_chars=6000,
         )
         t_pack = time.time() - t_pack_start
-        selected_candidates = _candidates_for_packed_items(merged_candidates, packed_context)
+        selected_candidates = _candidates_for_packed_items(reranked_candidates, packed_context)
         top_chunks = prioritize_main_contexts(packed_context_to_legacy_contexts(packed_context), top_k)
 
         # ── Step 5: Extract graph_nodes from Qdrant payloads ────────
@@ -420,6 +451,7 @@ class HybridRetriever:
             merged_candidates=merged_candidates[:8],
             selected_context=selected_candidates,
             packed_context=packed_context,
+            rerank_trace=rerank_trace,
             warnings=warnings,
             timings_ms={
                 "normalize_expand": round(t_norm * 1000, 3),
@@ -428,6 +460,7 @@ class HybridRetriever:
                 "sparse": round(t_sparse * 1000, 3),
                 "boost": round(t_boost * 1000, 3),
                 "entity": round(t_entity * 1000, 3),
+                "rerank": round(t_rerank * 1000, 3),
                 "pack": round(t_pack * 1000, 3),
                 "neo4j": round(t_neo4j * 1000, 3),
                 "total": round(t_total * 1000, 3),
@@ -447,6 +480,7 @@ class HybridRetriever:
                 "sparse_time_s": round(t_sparse, 3),
                 "boost_time_s": round(t_boost, 3),
                 "entity_time_s": round(t_entity, 3),
+                "rerank_time_s": round(t_rerank, 3),
                 "context_pack_time_s": round(t_pack, 3),
                 "neo4j_time_s": round(t_neo4j, 3),
                 "dense_count": len(dense_results),
@@ -455,6 +489,7 @@ class HybridRetriever:
                 "boosted_count": boost_count,
                 "entity_count": len(entity_candidates),
                 "merged_count": len(merged_candidates),
+                "reranked_count": len(reranked_candidates),
                 "top_k": top_k,
                 "entity_names_count": len(entity_names),
                 "graph_facts_count": len(graph_facts),
@@ -481,6 +516,26 @@ class HybridRetriever:
                         candidate_debug_summary(candidate)
                         for candidate in merged_candidates[:5]
                     ],
+                    "rerank": {
+                        "enabled": rerank_trace.enabled,
+                        "provider": rerank_trace.provider,
+                        "input_count": rerank_trace.input_count,
+                        "output_count": rerank_trace.output_count,
+                        "top_n": rerank_trace.top_n,
+                        "ranked_candidates": [
+                            {
+                                "rank": item.rerank_rank,
+                                "candidate_id": item.candidate.candidate_id,
+                                "source": item.candidate.source,
+                                "canonical_name": item.candidate.payload.get("canonical_name"),
+                                "chunk_id": item.candidate.payload.get("chunk_id"),
+                                "rerank_score": item.rerank_score,
+                                "reasons": item.score_breakdown.reasons,
+                            }
+                            for item in rerank_trace.ranked_candidates[:5]
+                        ],
+                        "warnings": rerank_trace.warnings,
+                    },
                     "packed_context": {
                         "entity_items_count": packed_context.entity_items_count,
                         "chunk_items_count": packed_context.chunk_items_count,
@@ -492,6 +547,7 @@ class HybridRetriever:
                     "warnings": warnings,
                 },
                 "retrieval_trace": trace.model_dump(mode="json"),
+                "rerank_trace": rerank_trace.model_dump(mode="json"),
                 "packed_context": packed_context.model_dump(mode="json"),
             },
         )

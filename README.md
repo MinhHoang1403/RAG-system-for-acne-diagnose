@@ -215,7 +215,7 @@ Kiểm tra read-only trước khi nâng cấp retrieval:
 .\venv\Scripts\python.exe scripts\inspect_phase2_readiness.py
 ```
 
-Runtime Phase 2 hiện đã đọc Qdrant hybrid `dense`/`bm25`, entity cards từ `acne_entities_v1`, Neo4j graph facts và context packing theo intent. Legacy LLM graph extraction không bắt buộc cho baseline Phase 1 hiện tại.
+Runtime Phase 2 hiện đã đọc Qdrant hybrid `dense`/`bm25`, entity cards từ `acne_entities_v1`, Neo4j graph facts, local reranking và context packing theo intent. Legacy LLM graph extraction không bắt buộc cho baseline Phase 1 hiện tại.
 
 Phase 2A bổ sung nền entity-aware retrieval:
 
@@ -232,13 +232,21 @@ Phase 2B bổ sung entity-aware context packing:
 - Với câu hỏi loại mụn, ưu tiên chunk evidence theo `concern`, `content_type`, `condition`, `domain_topic`.
 - Packed context được bridge về format context cũ để prompt hiện tại vẫn tương thích.
 
-Giới hạn hiện tại: chưa có production reranker, chưa có advanced medical answer verifier, chưa có web fallback và chưa có Neo4j expansion sâu hơn.
+Phase 2C bổ sung local/offline-first reranking:
+
+- Rerank merged candidates sau candidate merge và trước context packing.
+- Provider mặc định `local_rules`, deterministic và không gọi external API.
+- `RERANK_ENABLED=false` tắt reranker; `RERANK_TOP_N` và `RERANK_PROVIDER` điều chỉnh runtime.
+- `local_model` chỉ là extension point có fallback về `local_rules`, không tự tải model.
+
+Giới hạn hiện tại: chưa có external rerank provider/model thật, chưa có advanced medical answer verifier, chưa có web fallback và chưa có Neo4j expansion sâu hơn.
 
 Validation:
 
 ```powershell
 .\venv\Scripts\python.exe scripts\eval_phase2_retrieval.py
 .\venv\Scripts\python.exe scripts\eval_phase2_context_packing.py
+.\venv\Scripts\python.exe scripts\eval_phase2_reranking.py
 .\venv\Scripts\python.exe scripts\inspect_phase2_readiness.py
 .\venv\Scripts\python.exe scripts\validate_phase1_complete.py
 .\venv\Scripts\python.exe -m pytest tests -q --no-cov
