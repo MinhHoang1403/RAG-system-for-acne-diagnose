@@ -169,6 +169,7 @@ async def retrieve_context_node(state: ClinicalState) -> dict:
             "graph_facts": result.graph_facts,
             "sources": result.sources,
             "retrieval_trace": result.metadata.get("retrieval_trace"),
+            "packed_context": result.metadata.get("packed_context"),
         }
     except Exception as e:
         logger.error(f"Retrieval error: {e}")

@@ -90,6 +90,45 @@ class RetrievedCandidate(BaseModel):
     debug: dict[str, Any] = Field(default_factory=dict)
 
 
+class ContextItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str
+    source: Literal["entity", "chunk"]
+    role: str
+    text: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    score: float | None = None
+    fused_score: float | None = None
+    rank: int | None = None
+    matched_metadata: dict[str, Any] = Field(default_factory=dict)
+    reason: str
+
+
+class ContextPackTrace(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str
+    selected_entity_ids: list[str] = Field(default_factory=list)
+    selected_chunk_ids: list[str] = Field(default_factory=list)
+    selection_reasons: list[str] = Field(default_factory=list)
+    dropped_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class PackedContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    original_query: str
+    intent: str
+    items: list[ContextItem] = Field(default_factory=list)
+    context_text: str
+    entity_items_count: int = 0
+    chunk_items_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    debug: dict[str, Any] = Field(default_factory=dict)
+
+
 class RetrievalTrace(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -100,12 +139,16 @@ class RetrievalTrace(BaseModel):
     chunk_candidates: list[RetrievedCandidate] = Field(default_factory=list)
     merged_candidates: list[RetrievedCandidate] = Field(default_factory=list)
     selected_context: list[RetrievedCandidate] = Field(default_factory=list)
+    packed_context: PackedContext | None = None
     warnings: list[str] = Field(default_factory=list)
     timings_ms: dict[str, float] = Field(default_factory=dict)
 
 
 __all__ = [
+    "ContextItem",
+    "ContextPackTrace",
     "NormalizedQuery",
+    "PackedContext",
     "QueryExpansion",
     "RetrievedCandidate",
     "RetrievalTrace",

@@ -27,6 +27,7 @@ from src.database.graph_store import Neo4jGraphStore
 from src.database.vector_store import QdrantVectorStore, embed_query
 from src.retrieval.candidate_merge import candidate_debug_summary, merge_candidates
 from src.retrieval.contracts import RetrievalTrace
+from src.retrieval.context_packer import pack_context, packed_context_to_legacy_contexts
 from src.retrieval.entity_retriever import EntityRetriever
 from src.retrieval.metadata_boost import boost_chunk_results
 from src.retrieval.query_expansion import expand_normalized_query
@@ -357,15 +358,16 @@ class HybridRetriever:
             normalized_query=normalized_query,
             limit=max(top_k * 2, 8),
         )
-        selected_candidates = _select_context_candidates(
-            merged_candidates,
-            chunk_candidates,
-            top_k=top_k,
+        t_pack_start = time.time()
+        packed_context = pack_context(
+            normalized_query=normalized_query,
+            merged_candidates=merged_candidates,
+            max_items=max(top_k, 5),
+            max_chars=6000,
         )
-        top_chunks = prioritize_main_contexts(
-            [_candidate_to_context(candidate) for candidate in selected_candidates],
-            top_k,
-        )
+        t_pack = time.time() - t_pack_start
+        selected_candidates = _candidates_for_packed_items(merged_candidates, packed_context)
+        top_chunks = prioritize_main_contexts(packed_context_to_legacy_contexts(packed_context), top_k)
 
         # ── Step 5: Extract graph_nodes from Qdrant payloads ────────
         entity_names: set[str] = set()
@@ -417,6 +419,7 @@ class HybridRetriever:
             chunk_candidates=chunk_candidates[:8],
             merged_candidates=merged_candidates[:8],
             selected_context=selected_candidates,
+            packed_context=packed_context,
             warnings=warnings,
             timings_ms={
                 "normalize_expand": round(t_norm * 1000, 3),
@@ -425,6 +428,7 @@ class HybridRetriever:
                 "sparse": round(t_sparse * 1000, 3),
                 "boost": round(t_boost * 1000, 3),
                 "entity": round(t_entity * 1000, 3),
+                "pack": round(t_pack * 1000, 3),
                 "neo4j": round(t_neo4j * 1000, 3),
                 "total": round(t_total * 1000, 3),
             },
@@ -443,6 +447,7 @@ class HybridRetriever:
                 "sparse_time_s": round(t_sparse, 3),
                 "boost_time_s": round(t_boost, 3),
                 "entity_time_s": round(t_entity, 3),
+                "context_pack_time_s": round(t_pack, 3),
                 "neo4j_time_s": round(t_neo4j, 3),
                 "dense_count": len(dense_results),
                 "sparse_count": len(sparse_results),
@@ -476,9 +481,18 @@ class HybridRetriever:
                         candidate_debug_summary(candidate)
                         for candidate in merged_candidates[:5]
                     ],
+                    "packed_context": {
+                        "entity_items_count": packed_context.entity_items_count,
+                        "chunk_items_count": packed_context.chunk_items_count,
+                        "selected_entity_ids": packed_context.debug.get("pack_trace", {}).get("selected_entity_ids", []),
+                        "selected_chunk_ids": packed_context.debug.get("pack_trace", {}).get("selected_chunk_ids", []),
+                        "selection_reasons": packed_context.debug.get("pack_trace", {}).get("selection_reasons", []),
+                        "warnings": packed_context.warnings,
+                    },
                     "warnings": warnings,
                 },
                 "retrieval_trace": trace.model_dump(mode="json"),
+                "packed_context": packed_context.model_dump(mode="json"),
             },
         )
 
@@ -564,26 +578,11 @@ class HybridRetriever:
             logger.warning("Error closing entity retriever: %s", exc)
 
 
-def _select_context_candidates(
-    merged_candidates: list[Any],
-    chunk_candidates: list[Any],
-    top_k: int,
-) -> list[Any]:
-    selected = merged_candidates[:top_k]
-    if not any(candidate.source == "chunk" for candidate in selected):
-        selected = [*selected[: max(top_k - 1, 0)], *chunk_candidates[:1]]
-    return selected[:top_k]
-
-
-def _candidate_to_context(candidate: Any) -> dict[str, Any]:
-    payload = dict(candidate.payload)
-    payload["text"] = candidate.text
-    payload["score"] = candidate.fused_score if candidate.fused_score is not None else candidate.score
-    payload["retrieval_source"] = candidate.source
-    payload["matched_metadata"] = candidate.matched_metadata
-    payload["retrieval_debug"] = candidate.debug
-    if candidate.source == "entity":
-        payload.setdefault("source_file", f"entity:{candidate.collection}")
-        payload.setdefault("header", payload.get("entity_type", "entity"))
-        payload.setdefault("context_role", "entity")
-    return payload
+def _candidates_for_packed_items(merged_candidates: list[Any], packed_context: Any) -> list[Any]:
+    by_id = {candidate.candidate_id: candidate for candidate in merged_candidates}
+    selected = []
+    for item in packed_context.items:
+        candidate = by_id.get(item.item_id)
+        if candidate is not None:
+            selected.append(candidate)
+    return selected

@@ -34,6 +34,7 @@ class ClinicalState(TypedDict):
     graph_facts: list[dict[str, Any]]
     sources: list[str]
     retrieval_trace: dict[str, Any] | None
+    packed_context: dict[str, Any] | None
     
     # Reasoning & Generation
     safety_flags: list[str]

@@ -192,6 +192,7 @@ def inspect_runtime_code() -> dict[str, Any]:
     graph_store_source = (PROJECT_ROOT / "src" / "database" / "graph_store.py").read_text(encoding="utf-8")
     entity_retriever_source = (PROJECT_ROOT / "src" / "retrieval" / "entity_retriever.py").read_text(encoding="utf-8")
     query_normalization_source = (PROJECT_ROOT / "src" / "retrieval" / "query_normalization.py").read_text(encoding="utf-8")
+    context_packer_source = (PROJECT_ROOT / "src" / "retrieval" / "context_packer.py").read_text(encoding="utf-8")
 
     return {
         "current_capabilities": {
@@ -208,10 +209,12 @@ def inspect_runtime_code() -> dict[str, Any]:
             "taxonomy_query_expansion": "expand_normalized_query" in retriever_source,
             "metadata_aware_chunk_boost": "boost_chunk_results" in retriever_source,
             "candidate_merge_trace": "RetrievalTrace" in retriever_source,
+            "entity_aware_context_packing": "pack_context" in retriever_source
+            and "PackedContext" in context_packer_source,
         },
         "deferred_phase2_features": [
             "Add production reranking over merged entity/chunk candidates.",
-            "Add advanced context packing across entity cards, chunks, and graph facts.",
+            "Add advanced medical answer verifier over generated answers.",
             "Use deterministic Neo4j graph for deeper structured expansion beyond 1-hop supplemental facts.",
             "Web fallback is intentionally not implemented.",
         ],
@@ -238,7 +241,7 @@ async def main() -> int:
         "runtime_config": runtime_config,
         "phase1_state_checks": checks,
         **runtime_code,
-        "recommended_next_step": "Phase 2A: entity-aware retrieval upgrade using acne_entities_v1 and deterministic Neo4j expansion.",
+        "recommended_next_step": "Phase 2C: production reranking, answer verification, and deeper deterministic Neo4j expansion.",
     }
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     return 0 if report["passed"] else 1
