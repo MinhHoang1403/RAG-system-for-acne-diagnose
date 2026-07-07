@@ -541,13 +541,16 @@ Invoke-RestMethod `
 | `QDRANT_COLLECTION_NAME` | `acne_knowledge` | Collection chính |
 | `CHUNK_QDRANT_COLLECTION_NAME` | `acne_knowledge` | Collection chunk Phase 1 hiện tại; legacy `acne_chunks_v1` fallback về `QDRANT_COLLECTION_NAME` |
 | `ENTITY_QDRANT_COLLECTION_NAME` | `acne_entities_v1` | Collection entity cards riêng |
-| `NEO4J_URI` | `bolt://localhost:7687` | Neo4j |
+| `NEO4J_URI` | `bolt://127.0.0.1:7687` | Neo4j |
 | `NEO4J_USERNAME` | `neo4j` | Neo4j user |
 | `NEO4J_PASSWORD` | `password` | Neo4j password |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis |
 | `CACHE_ENABLED` | `true` | Bật/tắt cache |
 | `CACHE_TTL_SECONDS` | `86400` | TTL Redis cache |
 | `CACHE_ANSWER_VERSION` | `v5` | Version cache |
+| `RERANK_ENABLED` | `true` | Bật/tắt local reranker |
+| `RERANK_PROVIDER` | `local_rules` | Provider rerank offline mặc định |
+| `RERANK_TOP_N` | `8` | Số candidate giữ sau rerank |
 | `PROMPT_VERSION` | `medical_prompt_v2` | Version prompt dùng trong Redis cache key |
 | `KB_VERSION` | `acne_kb_v1` | Version KB dùng cho chunk/entity payload |
 | `TAXONOMY_VERSION` | `drug_taxonomy_v1` | Version taxonomy entity |

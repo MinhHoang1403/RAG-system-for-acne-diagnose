@@ -13,6 +13,8 @@ class ClinicalState(TypedDict):
 
     # Input
     user_question: str
+    user_id: str | None
+    session_id: str | None
     conversation_history: list[dict[str, str]]
     
     # Processed Input

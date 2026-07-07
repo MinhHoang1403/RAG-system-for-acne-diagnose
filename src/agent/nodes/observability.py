@@ -29,7 +29,7 @@ async def observability_export_node(state: ClinicalState) -> dict[str, Any]:
         event = build_observability_event(
             query=query,
             state=dict(state),
-            session_id=None,
+            session_id=state.get("session_id"),
             pipeline_manifest=state.get("pipeline_manifest"),
             pipeline_fingerprint=state.get("pipeline_fingerprint"),
         )
