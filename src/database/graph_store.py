@@ -2,14 +2,20 @@
 src/database/graph_store.py – Neo4j Knowledge Graph Store
 =========================================================
 Read-only async client for querying the Neo4j knowledge graph
-populated during Pha 1 ingestion.
+populated during Phase 1 ingestion.
 
-Schema (from ingest_knowledge.py)
----------------------------------
-Node labels : DISEASE, DRUG, SYMPTOM, TREATMENT, MECHANISM, BODY_PART
-Node props  : name (unique, lowercase), description, created_at
-Relationships : CAUSES, TREATS, CONTRAINDICATES, PART_OF
-Rel props   : evidence, created_at
+Supported schemas
+-----------------
+Current deterministic graph:
+    Node labels : DrugProduct, ActiveIngredient, DrugClass, Condition,
+                  SafetyContext
+    Node props  : canonical_name, entity_id, aliases, metadata_json, ...
+    Relationships : HAS_ACTIVE_INGREDIENT, BELONGS_TO_CLASS
+
+Legacy LLM graph:
+    Node labels : DISEASE, DRUG, SYMPTOM, TREATMENT, MECHANISM, BODY_PART
+    Node props  : name, description, created_at
+    Relationships : CAUSES, TREATS, CONTRAINDICATES, PART_OF
 """
 
 from __future__ import annotations
@@ -26,6 +32,65 @@ logger = logging.getLogger(__name__)
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+
+
+ENTITY_CONTEXT_CYPHER = """
+MATCH (n)
+WHERE n.canonical_name IN $canonical_names
+   OR toLower(coalesce(n.canonical_name, n.name, '')) IN $legacy_names
+OPTIONAL MATCH (n)-[r]-(m)
+RETURN coalesce(n.canonical_name, n.name) AS entity,
+       labels(n)[0] AS entity_type,
+       coalesce(n.description, n.metadata_json, '') AS description,
+       type(r) AS relationship,
+       coalesce(m.canonical_name, m.name) AS related_entity,
+       CASE WHEN m IS NULL THEN null ELSE labels(m)[0] END AS related_type,
+       coalesce(m.description, m.metadata_json, '') AS related_description,
+       CASE WHEN r IS NULL THEN null
+            ELSE coalesce(r.evidence, r.source, r.created_by, '')
+       END AS evidence
+LIMIT $limit
+"""
+
+
+KEYWORD_SEARCH_CYPHER = """
+MATCH (n)
+WHERE ANY(
+    kw IN $keywords
+    WHERE toLower(coalesce(n.canonical_name, n.name, '')) CONTAINS kw
+)
+OPTIONAL MATCH (n)-[r]-(m)
+RETURN coalesce(n.canonical_name, n.name) AS entity,
+       labels(n)[0] AS entity_type,
+       coalesce(n.description, n.metadata_json, '') AS description,
+       type(r) AS relationship,
+       coalesce(m.canonical_name, m.name) AS related_entity,
+       CASE WHEN m IS NULL THEN null ELSE labels(m)[0] END AS related_type,
+       coalesce(m.description, m.metadata_json, '') AS related_description,
+       CASE WHEN r IS NULL THEN null
+            ELSE coalesce(r.evidence, r.source, r.created_by, '')
+       END AS evidence
+LIMIT $limit
+"""
+
+
+def _normalize_entity_names(entity_names: list[str]) -> tuple[list[str], list[str]]:
+    """Return exact canonical names and lowercased legacy lookup names."""
+    cleaned = [name.strip() for name in entity_names if name and name.strip()]
+    canonical_names = sorted(set(cleaned), key=str.casefold)
+    legacy_names = sorted({name.casefold() for name in cleaned})
+    return canonical_names, legacy_names
+
+
+def _normalize_keywords(keywords: list[str]) -> list[str]:
+    """Normalize keyword fallback terms without allowing very broad matches."""
+    return sorted(
+        {
+            keyword.strip().casefold()
+            for keyword in keywords
+            if len(keyword.strip()) >= 3
+        }
+    )
 
 
 class Neo4jGraphStore:
@@ -57,7 +122,8 @@ class Neo4jGraphStore:
         Parameters
         ----------
         entity_names : list[str]
-            Entity names to look up (will be lowercased to match ingestion).
+            Entity names to look up. Current deterministic graph matches
+            ``canonical_name``; legacy graph matches lowercased ``name``.
         limit : int
             Maximum number of fact records to return.
 
@@ -71,33 +137,21 @@ class Neo4jGraphStore:
         if not entity_names:
             return []
 
-        # Normalise to lowercase (matching Pha 1 ingestion format)
-        names = list({n.strip().lower() for n in entity_names if n.strip()})
+        canonical_names, legacy_names = _normalize_entity_names(entity_names)
 
-        if not names:
+        if not canonical_names and not legacy_names:
             return []
-
-        # Undirected 1-hop traversal: (n)-[r]-(m) matches both directions
-        cypher = """
-        MATCH (n)
-        WHERE n.name IN $names
-        OPTIONAL MATCH (n)-[r]-(m)
-        RETURN n.name            AS entity,
-               labels(n)[0]      AS entity_type,
-               n.description     AS description,
-               type(r)           AS relationship,
-               m.name            AS related_entity,
-               labels(m)[0]      AS related_type,
-               m.description     AS related_description,
-               r.evidence        AS evidence
-        LIMIT $limit
-        """
 
         facts: list[dict[str, Any]] = []
 
         try:
             async with self._driver.session() as session:
-                result = await session.run(cypher, names=names, limit=limit)
+                result = await session.run(
+                    ENTITY_CONTEXT_CYPHER,
+                    canonical_names=canonical_names,
+                    legacy_names=legacy_names,
+                    limit=limit,
+                )
                 records = [record async for record in result]
 
                 seen_entities: set[str] = set()
@@ -120,7 +174,7 @@ class Neo4jGraphStore:
 
         logger.debug(
             "Neo4j: queried %d entity names → %d facts",
-            len(names),
+            len(set(canonical_names + legacy_names)),
             len(facts),
         )
 
@@ -145,33 +199,17 @@ class Neo4jGraphStore:
         if not keywords:
             return []
 
-        # Filter out very short keywords that would match too broadly
-        keywords = [kw.strip().lower() for kw in keywords if len(kw.strip()) >= 3]
+        keywords = _normalize_keywords(keywords)
 
         if not keywords:
             return []
-
-        cypher = """
-        MATCH (n)
-        WHERE ANY(kw IN $keywords WHERE n.name CONTAINS kw)
-        OPTIONAL MATCH (n)-[r]-(m)
-        RETURN n.name            AS entity,
-               labels(n)[0]      AS entity_type,
-               n.description     AS description,
-               type(r)           AS relationship,
-               m.name            AS related_entity,
-               labels(m)[0]      AS related_type,
-               m.description     AS related_description,
-               r.evidence        AS evidence
-        LIMIT $limit
-        """
 
         facts: list[dict[str, Any]] = []
 
         try:
             async with self._driver.session() as session:
                 result = await session.run(
-                    cypher,
+                    KEYWORD_SEARCH_CYPHER,
                     keywords=keywords,
                     limit=limit,
                 )

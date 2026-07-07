@@ -203,6 +203,20 @@ Luồng chính:
 10. Formatter hậu xử lý câu trả lời, thêm disclaimer và metadata.
 11. API lưu chat vào PostgreSQL rồi trả response.
 
+### Phase 2 Readiness
+
+Baseline Phase 1 ổn định tại tag `phase1-hardened-pass`: chunk collection `acne_knowledge`, entity collection `acne_entities_v1`, embedding `models/gemini-embedding-2` dim `3072`, Neo4j deterministic graph 21 nodes / 15 relationships.
+
+Kiểm tra read-only trước khi nâng cấp retrieval:
+
+```powershell
+.\venv\Scripts\python.exe scripts\validate_phase1_complete.py
+.\venv\Scripts\python.exe scripts\eval_phase1_readiness.py --verbose
+.\venv\Scripts\python.exe scripts\inspect_phase2_readiness.py
+```
+
+Runtime Phase 2 hiện đã đọc Qdrant hybrid `dense`/`bm25` và Neo4j graph facts. Phase 2A tiếp theo nên nối entity-card retrieval từ `acne_entities_v1`, query normalization bằng taxonomy, metadata-aware context selection và deterministic Neo4j expansion sâu hơn. Legacy LLM graph extraction không bắt buộc cho baseline Phase 1 hiện tại.
+
 ## Hướng Dẫn Cài Đặt
 
 Yêu cầu:
