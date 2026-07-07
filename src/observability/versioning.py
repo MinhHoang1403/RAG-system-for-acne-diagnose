@@ -39,7 +39,7 @@ def build_pipeline_version_manifest(settings: Mapping[str, Any] | None = None) -
         "retrieval_pipeline_version": value("RETRIEVAL_PIPELINE_VERSION", "retrieval_pipeline_v2"),
         "context_packer_version": value("CONTEXT_PACKER_VERSION", "context_packer_v2"),
         "reranker_version": value("RERANKER_VERSION", "local_reranker_v1"),
-        "answer_verifier_version": value("ANSWER_VERIFIER_VERSION", "answer_verifier_v1"),
+        "answer_verifier_version": value("ANSWER_VERIFIER_VERSION", "answer_verifier_v2"),
         "cache_schema_version": value("CACHE_SCHEMA_VERSION", "v3"),
         "answer_cache_version": answer_cache_version,
         "embedding_model": value("EMBEDDING_MODEL", "models/gemini-embedding-2"),

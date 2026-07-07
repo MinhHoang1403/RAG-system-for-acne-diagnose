@@ -52,7 +52,7 @@ Checkpoint ổn định:
 | Phase 2A | Đã triển khai và xác minh | Entity-aware query normalization, taxonomy expansion, entity retrieval, chunk metadata boosting | `scripts/eval_phase2_retrieval.py` |
 | Phase 2B | Đã triển khai và xác minh | Intent-aware context packing cho entity cards và evidence chunks | `scripts/eval_phase2_context_packing.py` |
 | Phase 2C | Đã triển khai và xác minh | Deterministic local reranker với `RERANK_PROVIDER=local_rules` | `scripts/eval_phase2_reranking.py` |
-| Phase 2D | Đã triển khai và xác minh | Answer Quality Verifier và answer guard dựa trên quy tắc | `scripts/eval_phase2_answer_quality.py`, `scripts/smoke_phase2_runtime.py --mode offline` |
+| Phase 2D | Đã triển khai và xác minh | Answer Quality Verifier, Vietnamese negation/proposition hardening và answer guard dựa trên quy tắc | `scripts/eval_phase2_answer_quality.py`, `scripts/smoke_phase2_runtime.py --mode offline` |
 | Phase 2E | Đã triển khai và xác minh | Cache versioning, pipeline fingerprint, observability đã sanitize, debug report | `scripts/inspect_cache_versions.py`, `scripts/generate_phase2_debug_report.py` |
 | Pre-UI audit | Đã triển khai và xác minh | Import API, OpenAPI routes, health checks, frontend API contract | `scripts/pre_ui_runtime_check.py` |
 
@@ -71,7 +71,8 @@ Checkpoint ổn định:
 - LangGraph runtime gồm cache lookup, guardrail, retrieval, generation,
   answer verification, cache store và observability export tùy chọn.
 - Answer Quality Verifier dựa trên quy tắc để phát hiện một số mâu thuẫn thường
-  gặp trong miền trị mụn và an toàn thuốc.
+  gặp trong miền trị mụn và an toàn thuốc, gồm hardening cho phủ định tiếng
+  Việt như `không phải là kháng sinh`.
 - Redis semantic cache được cô lập bằng answer version và pipeline fingerprint.
 - FastAPI backend và React/Vite frontend.
 - Bộ offline evaluation cho Phase 1 và Phase 2.
@@ -491,7 +492,7 @@ Answer cache key bao gồm:
 
 - cache schema version, default `v3`;
 - answer cache version, hiện là `v5`;
-- pipeline fingerprint;
+- pipeline fingerprint, hiện bao gồm `answer_verifier_v2`;
 - normalized question;
 - intent;
 - provider/model;

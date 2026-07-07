@@ -28,6 +28,24 @@ def test_pipeline_fingerprint_is_deterministic_and_changes():
     assert len(fingerprint_a) == 24
 
 
+def test_answer_verifier_version_is_in_manifest_and_changes_fingerprint():
+    old_manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "ANSWER_VERIFIER_VERSION": "answer_verifier_v1",
+        }
+    )
+    new_manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "ANSWER_VERIFIER_VERSION": "answer_verifier_v2",
+        }
+    )
+
+    assert new_manifest["answer_verifier_version"] == "answer_verifier_v2"
+    assert compute_pipeline_fingerprint(old_manifest) != compute_pipeline_fingerprint(new_manifest)
+
+
 def test_pipeline_manifest_does_not_include_secret_keys():
     manifest = build_pipeline_version_manifest(
         {

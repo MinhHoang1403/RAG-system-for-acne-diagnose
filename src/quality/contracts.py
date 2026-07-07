@@ -17,6 +17,26 @@ class AnswerQualityIssue(BaseModel):
     suggested_fix: str | None = None
 
 
+class DomainProposition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str
+    relation: Literal[
+        "is_a",
+        "is_not_a",
+        "contains",
+        "does_not_contain",
+        "requires_supervision",
+        "unsafe_recommendation",
+        "uncertain",
+    ]
+    object: str
+    confidence: float
+    matched_text: str
+    normalized_text: str
+    source_rule: str
+
+
 class AnswerVerificationReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -47,4 +67,5 @@ __all__ = [
     "AnswerGuardResult",
     "AnswerQualityIssue",
     "AnswerVerificationReport",
+    "DomainProposition",
 ]

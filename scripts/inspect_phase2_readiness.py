@@ -236,6 +236,8 @@ def inspect_runtime_code() -> dict[str, Any]:
             and "rerank_trace" in retriever_source,
             "answer_quality_verifier_available": "def verify_answer_quality" in answer_verifier_source
             and "def apply_answer_guard" in answer_verifier_source,
+            "vietnamese_answer_verifier_hardened": "answer_verifier_v2" in cache_versioning_source
+            and "extract_domain_propositions" in answer_verifier_source,
             "answer_guard_integrated": "answer_quality" in agent_graph_source
             and "cache_store" in agent_graph_source,
             "answer_quality_eval_available": answer_quality_eval_path.exists(),
