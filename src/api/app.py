@@ -357,7 +357,7 @@ async def list_models():
         ]
     }
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat", response_model=ChatResponse, response_model_exclude_none=True)
 async def chat_endpoint(request: ChatRequest):
     """
     Main chat endpoint to interact with the LangGraph Agent.

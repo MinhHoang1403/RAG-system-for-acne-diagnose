@@ -127,6 +127,8 @@ async def run_clinical_agent(
     # Initialize state
     initial_state = {
         "user_question": message,
+        "user_id": user_id,
+        "session_id": session_id,
         "conversation_history": conversation_history,
         "standalone_question": None,
         "use_history_context": False,
@@ -174,6 +176,8 @@ async def run_clinical_agent(
     # Format and return the output
     return {
         "answer": final_state.get("final_answer", ""),
+        "user_id": final_state.get("user_id"),
+        "session_id": final_state.get("session_id"),
         "standalone_question": final_state.get("standalone_question"),
         "symptoms": final_state.get("symptoms", []),
         "safety_flags": final_state.get("safety_flags", []),

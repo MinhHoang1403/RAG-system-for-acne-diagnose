@@ -6,6 +6,7 @@
 # Environment & Secrets  (12-Factor: config in environment)
 # ---------------------------------------------------------------------------
 .env
+.env.phase2_audit_backup
 .env.local
 .env.*.local
 .envrc
