@@ -1,4 +1,3 @@
-import React from 'react';
 import { formatText } from '../utils/markdown.jsx';
 import DebugPanel from './DebugPanel.jsx';
 

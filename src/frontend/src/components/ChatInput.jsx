@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import ModelSelector from './ModelSelector.jsx';
 
 const MAX_MESSAGE_CHARS = 500;

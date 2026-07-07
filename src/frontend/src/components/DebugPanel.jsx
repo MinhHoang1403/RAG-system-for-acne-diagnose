@@ -1,5 +1,3 @@
-import React from 'react';
-
 export default function DebugPanel({ graphFacts }) {
   if (!graphFacts || graphFacts.length === 0) return null;
 

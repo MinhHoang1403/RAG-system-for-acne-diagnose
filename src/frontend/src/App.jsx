@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Sidebar from './components/Sidebar.jsx';
 import ChatWindow from './components/ChatWindow.jsx';
 import {
@@ -8,7 +8,6 @@ import {
   fetchMessages,
   renameSession as apiRenameSession,
   hideSession as apiHideSession,
-  syncSessionsToBackend,
   deleteAllChatSessions,
 } from './api/chatApi.js';
 import {
@@ -36,7 +35,6 @@ export default function App() {
 
   // Track whether initial load from backend has been done
   const initialLoadDone = useRef(false);
-  const syncDone = useRef(false);
 
   // ── Derived ────────────────────────────────────────────
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
@@ -90,21 +88,7 @@ export default function App() {
         }
       }
     })();
-  }, []);
-
-  // ── Sync localStorage sessions to backend ──────────────
-  async function _syncLocalStorageToBackend(lsSessions) {
-    // Only sync sessions that have messages
-    const toSync = lsSessions.filter((s) => s.messages && s.messages.length > 0);
-    if (toSync.length === 0) return;
-
-    try {
-      const result = await syncSessionsToBackend(toSync);
-      console.info(`Sync complete: ${result.synced} synced, ${result.skipped} skipped, ${result.errors} errors`);
-    } catch (err) {
-      console.warn('Sync failed (non-critical):', err);
-    }
-  }
+  }, [activeSessionId]);
 
   // ── Load messages from backend when selecting a session ─
   const _loadMessagesFromBackend = useCallback(async (sessionId) => {
