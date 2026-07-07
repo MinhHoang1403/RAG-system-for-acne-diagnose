@@ -13,8 +13,13 @@ from typing import Any, Optional, Tuple
 
 from src.agent.text_encoding import repair_mojibake
 from src.cache.redis_cache import get_redis
+from src.observability.versioning import (
+    build_pipeline_version_manifest,
+    compute_pipeline_fingerprint,
+    get_answer_cache_version,
+)
 
-CACHE_SCHEMA_VERSION = os.getenv("CACHE_SCHEMA_VERSION", "v2")
+CACHE_SCHEMA_VERSION = os.getenv("CACHE_SCHEMA_VERSION", "v3")
 CACHE_PROMPT_VERSION = os.getenv("CACHE_PROMPT_VERSION", "medical_prompt_v2")
 
 
@@ -129,19 +134,24 @@ def make_cache_key(
     intent: str = "general_acne",
     provider: str = "unknown",
     model: str = "unknown",
+    pipeline_fingerprint: str | None = None,
 ) -> str:
     """
     Generate a Redis cache key based on the normalized question and versions.
-    Format: cache:answer:{answer_version}:{hash}
+    Format: cache:answer:{schema_version}:{answer_version}:{pipeline_fingerprint}:{hash}
     """
-    answer_version = os.getenv("CACHE_ANSWER_VERSION", "v4")
+    answer_version = get_answer_cache_version()
     prompt_version = os.getenv("PROMPT_VERSION", CACHE_PROMPT_VERSION)
     kb_version = os.getenv("KB_VERSION", "acne_kb_v1")
+    pipeline_fingerprint = pipeline_fingerprint or compute_pipeline_fingerprint(
+        build_pipeline_version_manifest()
+    )
     
     # Create deterministic payload
     payload = "|".join([
         CACHE_SCHEMA_VERSION,
         answer_version,
+        pipeline_fingerprint,
         normalized_question,
         intent,
         provider,
@@ -152,7 +162,7 @@ def make_cache_key(
     hash_obj = hashlib.sha256(payload.encode('utf-8'))
     hash_hex = hash_obj.hexdigest()
     
-    return f"cache:answer:{CACHE_SCHEMA_VERSION}:{answer_version}:{hash_hex}"
+    return f"cache:answer:{CACHE_SCHEMA_VERSION}:{answer_version}:{pipeline_fingerprint}:{hash_hex}"
 
 async def get_exact_cache(
     normalized_question: str,
@@ -160,17 +170,22 @@ async def get_exact_cache(
     intent: str = "general_acne",
     provider: str = "unknown",
     model: str = "unknown",
+    pipeline_fingerprint: str | None = None,
 ) -> Optional[dict[str, Any]]:
     """Retrieve exact match cache from Redis."""
     redis = await get_redis()
     if not redis:
         return None
 
+    pipeline_fingerprint = pipeline_fingerprint or compute_pipeline_fingerprint(
+        build_pipeline_version_manifest()
+    )
     cache_key = make_cache_key(
         normalized_question,
         intent=intent,
         provider=provider,
         model=model,
+        pipeline_fingerprint=pipeline_fingerprint,
     )
     try:
         cached_data = await redis.get(cache_key)
@@ -195,17 +210,22 @@ async def set_answer_cache(
     intent: str = "general_acne",
     provider: str = "unknown",
     model: str = "unknown",
+    pipeline_fingerprint: str | None = None,
 ):
     """Store the answer in Redis."""
     redis = await get_redis()
     if not redis:
         return
-        
+
+    pipeline_fingerprint = pipeline_fingerprint or compute_pipeline_fingerprint(
+        build_pipeline_version_manifest()
+    )
     cache_key = make_cache_key(
         normalized_question,
         intent=intent,
         provider=provider,
         model=model,
+        pipeline_fingerprint=pipeline_fingerprint,
     )
     ttl_seconds = int(os.getenv("CACHE_TTL_SECONDS", "86400"))
     
@@ -216,7 +236,9 @@ async def set_answer_cache(
         "sources": sources,
         "metadata": metadata,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "answer_version": os.getenv("CACHE_ANSWER_VERSION", "v4"),
+        "answer_version": get_answer_cache_version(),
+        "answer_cache_version": get_answer_cache_version(),
+        "pipeline_fingerprint": pipeline_fingerprint,
         "model_provider": metadata.get("provider"),
         "model_name": metadata.get("model"),
         "retrieval_method": metadata.get("retrieval"),

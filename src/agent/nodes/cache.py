@@ -17,6 +17,12 @@ from src.cache.semantic_cache import (
     get_exact_cache,
     set_answer_cache
 )
+from src.observability.versioning import (
+    build_pipeline_version_manifest,
+    compute_pipeline_fingerprint,
+    get_answer_cache_version,
+    pipeline_manifest_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,19 +118,27 @@ async def cache_lookup_node(state: ClinicalState) -> dict[str, Any]:
         
     # Attempt to retrieve from Redis
     cache_provider, cache_model = _resolve_cache_model_key(state)
+    pipeline_manifest = state.get("pipeline_manifest") or build_pipeline_version_manifest()
+    pipeline_fingerprint = state.get("pipeline_fingerprint") or compute_pipeline_fingerprint(pipeline_manifest)
     cached_data = await get_exact_cache(
         normalized,
         intent=intent,
         provider=cache_provider,
         model=cache_model,
+        pipeline_fingerprint=pipeline_fingerprint,
     )
     
     if cached_data:
         import os
         meta = cached_data.get("metadata", {})
-        expected_version = os.getenv("CACHE_ANSWER_VERSION", "v4")
+        expected_version = get_answer_cache_version()
+        cached_fingerprint = meta.get("pipeline_fingerprint") or cached_data.get("pipeline_fingerprint")
         
-        if not meta.get("quality_passed") or meta.get("answer_version") != expected_version:
+        if (
+            not meta.get("quality_passed")
+            or meta.get("answer_version") != expected_version
+            or cached_fingerprint != pipeline_fingerprint
+        ):
             logger.info("Cache entry invalid or missing quality metadata. Treating as MISS.")
             return {
                 "cache_checked": True,
@@ -149,6 +163,8 @@ async def cache_lookup_node(state: ClinicalState) -> dict[str, Any]:
             "cached_sources": cached_data.get("sources", []),
             "cache_metadata": cached_data.get("metadata", {}),
             "normalized_question": normalized,
+            "pipeline_manifest": pipeline_manifest,
+            "pipeline_fingerprint": pipeline_fingerprint,
             
             # Since it's a hit, we bypass LLM generation
             "final_answer": cached_answer,
@@ -325,6 +341,14 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
     # Build metadata to store
     answer_quality_report = state.get("answer_quality_report") or {}
     quality_passed = answer_quality_report.get("passed") if isinstance(answer_quality_report, dict) else None
+    pipeline_manifest = state.get("pipeline_manifest") or build_pipeline_version_manifest()
+    pipeline_fingerprint = state.get("pipeline_fingerprint") or compute_pipeline_fingerprint(pipeline_manifest)
+    answer_cache_version = get_answer_cache_version()
+    quality_issues = (
+        answer_quality_report.get("issues", [])
+        if isinstance(answer_quality_report, dict)
+        else []
+    )
     metadata = {
         "provider": state.get("actual_provider"),
         "model": state.get("actual_model"),
@@ -332,12 +356,20 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
         "quality_checked": True,
         "quality_passed": bool(quality_passed) if quality_passed is not None else True,
         "quality_reason": "passed_answer_verifier" if quality_passed is not False else "answer_verifier_failed",
-        "answer_quality_issues": (
-            answer_quality_report.get("issues", [])
-            if isinstance(answer_quality_report, dict)
-            else []
-        ),
-        "answer_version": os.getenv("CACHE_ANSWER_VERSION", "v4"),
+        "answer_quality_issues": quality_issues,
+        "answer_quality_summary": {
+            "passed": quality_passed,
+            "issue_count": len(quality_issues),
+            "critical_count": sum(
+                1
+                for issue in quality_issues
+                if isinstance(issue, dict) and issue.get("severity") == "critical"
+            ),
+        },
+        "answer_version": answer_cache_version,
+        "answer_cache_version": answer_cache_version,
+        "pipeline_fingerprint": pipeline_fingerprint,
+        "pipeline_manifest": pipeline_manifest_summary(pipeline_manifest),
         "raw_question": raw_question,
         "standalone_question": standalone_q or "",
         "cache_key_question": target_question,
@@ -357,6 +389,7 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
         intent=intent,
         provider=cache_provider,
         model=cache_model,
+        pipeline_fingerprint=pipeline_fingerprint,
     )
     
     return {}

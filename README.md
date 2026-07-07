@@ -246,6 +246,14 @@ Phase 2D bổ sung answer quality verifier/guard deterministic:
 - `scripts/eval_phase2_answer_quality.py` chạy golden cases offline, không gọi LLM/embedding/API ngoài.
 - `scripts/smoke_phase2_runtime.py --mode offline` chạy smoke retrieval/rerank/context/quality bằng dữ liệu taxonomy local. `--live-chat` mới gọi runtime chat và có thể gọi LLM theo cấu hình.
 
+Phase 2E bổ sung cache versioning, observability và debug report offline:
+
+- Cache answer chuyển sang `CACHE_ANSWER_VERSION=v5` và key Redis có thêm `pipeline_fingerprint` deterministic, nên cache cũ không bị xóa nhưng không bị reuse sau thay đổi retrieval/rerank/context/answer guard.
+- `src/observability/versioning.py` tạo pipeline manifest/fingerprint không chứa API key/secrets.
+- `src/observability/trace_exporter.py` có sanitizer redaction/truncation và JSONL exporter. Runtime export mặc định tắt bằng `OBSERVABILITY_ENABLED=false`.
+- `scripts/inspect_cache_versions.py`, `scripts/eval_phase2_all.py` và `scripts/generate_phase2_debug_report.py` đều là offline/read-only, không chạy ingestion và không gọi live chat.
+- `logs/` và `reports/` là generated artifacts, không commit.
+
 Giới hạn hiện tại: chưa có external rerank provider/model thật, chưa có LLM-backed medical reviewer, chưa có web fallback, chưa có Neo4j expansion sâu hơn và chưa thay thế được clinical safety engine.
 
 Validation:
@@ -256,6 +264,9 @@ Validation:
 .\venv\Scripts\python.exe scripts\eval_phase2_reranking.py
 .\venv\Scripts\python.exe scripts\eval_phase2_answer_quality.py
 .\venv\Scripts\python.exe scripts\smoke_phase2_runtime.py --mode offline
+.\venv\Scripts\python.exe scripts\inspect_cache_versions.py
+.\venv\Scripts\python.exe scripts\eval_phase2_all.py
+.\venv\Scripts\python.exe scripts\generate_phase2_debug_report.py
 .\venv\Scripts\python.exe scripts\inspect_phase2_readiness.py
 .\venv\Scripts\python.exe scripts\validate_phase1_complete.py
 .\venv\Scripts\python.exe -m pytest tests -q --no-cov
@@ -536,7 +547,7 @@ Invoke-RestMethod `
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis |
 | `CACHE_ENABLED` | `true` | Bật/tắt cache |
 | `CACHE_TTL_SECONDS` | `86400` | TTL Redis cache |
-| `CACHE_ANSWER_VERSION` | `v4` | Version cache |
+| `CACHE_ANSWER_VERSION` | `v5` | Version cache |
 | `PROMPT_VERSION` | `medical_prompt_v2` | Version prompt dùng trong Redis cache key |
 | `KB_VERSION` | `acne_kb_v1` | Version KB dùng cho chunk/entity payload |
 | `TAXONOMY_VERSION` | `drug_taxonomy_v1` | Version taxonomy entity |
@@ -548,6 +559,10 @@ Invoke-RestMethod `
 | `LLM_CONCURRENCY` | `2` | Concurrency graph extraction |
 | `INGEST_BATCH_SIZE` | `16` | Batch embedding/Qdrant |
 | `GRAPH_BATCH_SIZE` | `50` | Batch graph |
+| `OBSERVABILITY_ENABLED` | `false` | Bật/tắt export trace JSONL |
+| `OBSERVABILITY_TRACE_DIR` | `logs/phase2_traces` | Thư mục trace generated |
+| `OBSERVABILITY_MAX_TEXT_CHARS` | `500` | Giới hạn text trong trace |
+| `PHASE2_DEBUG_METADATA` | `false` | Bật metadata debug ngắn trong API response |
 | `GRAPH_CACHE_VERSION` | `v2` | Version graph cache |
 | `GRAPH_PROMPT_SCHEMA_VERSION` | `clinical_graph_prompt_v2` | Version prompt graph |
 | `MAX_MESSAGE_CHARS` | `500` | Giới hạn input chat |
@@ -603,7 +618,7 @@ Chỉ dùng live chat smoke khi đã chủ động chấp nhận gọi provider 
 12. Can you help me repair my car engine?
 ```
 
-Sau khi đổi prompt, hãy cập nhật `.env` thành `PROMPT_VERSION=medical_prompt_v2` và `CACHE_ANSWER_VERSION=v4` để tránh dùng lại cache câu trả lời cũ. Không cần xóa Redis nếu đã bump version; nếu muốn dọn thủ công, chỉ xóa key `cache:answer:*`.
+Sau khi đổi prompt hoặc pipeline retrieval/rerank/context/answer guard, hãy cập nhật `.env` thành `PROMPT_VERSION=medical_prompt_v2` và `CACHE_ANSWER_VERSION=v5` để tránh dùng lại cache câu trả lời cũ. Phase 2E còn thêm `pipeline_fingerprint` vào cache key; không cần xóa Redis nếu version/fingerprint đã đổi. Nếu muốn dọn thủ công, chỉ xóa key `cache:answer:*`.
 
 ## Scope An Toàn
 

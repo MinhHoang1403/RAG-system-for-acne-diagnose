@@ -35,6 +35,9 @@ class ClinicalState(TypedDict):
     sources: list[str]
     retrieval_trace: dict[str, Any] | None
     packed_context: dict[str, Any] | None
+    pipeline_manifest: dict[str, Any] | None
+    pipeline_fingerprint: str | None
+    observability_exported: bool | None
     
     # Reasoning & Generation
     safety_flags: list[str]

@@ -24,6 +24,11 @@ from src.agent.nodes.respond import finalize_response_node
 from src.agent.nodes.quality import answer_quality_node
 from src.agent.nodes.guardrails import domain_guard_node
 from src.agent.nodes.cache import cache_lookup_node, cache_store_node
+from src.agent.nodes.observability import observability_export_node
+from src.observability.versioning import (
+    build_pipeline_version_manifest,
+    compute_pipeline_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,7 @@ def build_clinical_graph():
     builder.add_node("cache_store", cache_store_node)
     builder.add_node("finalize", finalize_response_node)
     builder.add_node("answer_quality", answer_quality_node)
+    builder.add_node("observability_export", observability_export_node)
     
     # Define the edges (the flow)
     builder.add_edge(START, "normalize")
@@ -75,7 +81,8 @@ def build_clinical_graph():
     builder.add_edge("generate", "finalize")
     builder.add_edge("finalize", "answer_quality")
     builder.add_edge("answer_quality", "cache_store")
-    builder.add_edge("cache_store", END)
+    builder.add_edge("cache_store", "observability_export")
+    builder.add_edge("observability_export", END)
     
     # Compile the graph
     graph = builder.compile()
@@ -114,6 +121,9 @@ async def run_clinical_agent(
     if conversation_history is None:
         conversation_history = []
     
+    pipeline_manifest = build_pipeline_version_manifest()
+    pipeline_fingerprint = compute_pipeline_fingerprint(pipeline_manifest)
+
     # Initialize state
     initial_state = {
         "user_question": message,
@@ -128,6 +138,9 @@ async def run_clinical_agent(
         "sources": [],
         "retrieval_trace": None,
         "packed_context": None,
+        "pipeline_manifest": pipeline_manifest,
+        "pipeline_fingerprint": pipeline_fingerprint,
+        "observability_exported": None,
         "safety_flags": [],
         "draft_answer": "",
         "final_answer": "",
@@ -168,6 +181,9 @@ async def run_clinical_agent(
         "graph_facts": final_state.get("graph_facts", []),
         "retrieval_trace": final_state.get("retrieval_trace"),
         "packed_context": final_state.get("packed_context"),
+        "pipeline_manifest": final_state.get("pipeline_manifest"),
+        "pipeline_fingerprint": final_state.get("pipeline_fingerprint"),
+        "observability_exported": final_state.get("observability_exported"),
         "answer_quality_report": final_state.get("answer_quality_report"),
         "answer_guard_modified": final_state.get("answer_guard_modified"),
         "answer_guard_mode": final_state.get("answer_guard_mode"),
