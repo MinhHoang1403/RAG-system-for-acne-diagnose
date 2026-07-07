@@ -217,6 +217,25 @@ Kiểm tra read-only trước khi nâng cấp retrieval:
 
 Runtime Phase 2 hiện đã đọc Qdrant hybrid `dense`/`bm25` và Neo4j graph facts. Phase 2A tiếp theo nên nối entity-card retrieval từ `acne_entities_v1`, query normalization bằng taxonomy, metadata-aware context selection và deterministic Neo4j expansion sâu hơn. Legacy LLM graph extraction không bắt buộc cho baseline Phase 1 hiện tại.
 
+Phase 2A bổ sung nền entity-aware retrieval:
+
+- Chuẩn hoá query bằng `DrugEntityNormalizer`.
+- Mở rộng query bằng taxonomy local, không gọi LLM.
+- Exact/payload entity retrieval từ `acne_entities_v1`.
+- Metadata boost cho chunks trong `acne_knowledge` theo `drug_product`, `active_ingredient`, `drug_class`, `condition`, `query_intent_hint`, `safety_context`, `concern` và `content_type`.
+- Merge candidates từ entity cards và chunks, kèm retrieval trace trong metadata/debug.
+
+Giới hạn hiện tại: chưa có production reranker, chưa có context packer nâng cao và chưa có web fallback.
+
+Validation:
+
+```powershell
+.\venv\Scripts\python.exe scripts\eval_phase2_retrieval.py
+.\venv\Scripts\python.exe scripts\inspect_phase2_readiness.py
+.\venv\Scripts\python.exe scripts\validate_phase1_complete.py
+.\venv\Scripts\python.exe -m pytest tests -q --no-cov
+```
+
 ## Hướng Dẫn Cài Đặt
 
 Yêu cầu:

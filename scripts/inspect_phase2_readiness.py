@@ -190,6 +190,8 @@ async def inspect_neo4j() -> dict[str, Any]:
 def inspect_runtime_code() -> dict[str, Any]:
     retriever_source = (PROJECT_ROOT / "src" / "database" / "retriever.py").read_text(encoding="utf-8")
     graph_store_source = (PROJECT_ROOT / "src" / "database" / "graph_store.py").read_text(encoding="utf-8")
+    entity_retriever_source = (PROJECT_ROOT / "src" / "retrieval" / "entity_retriever.py").read_text(encoding="utf-8")
+    query_normalization_source = (PROJECT_ROOT / "src" / "retrieval" / "query_normalization.py").read_text(encoding="utf-8")
 
     return {
         "current_capabilities": {
@@ -199,15 +201,19 @@ def inspect_runtime_code() -> dict[str, Any]:
             "legacy_query_metadata_boost": "extract_dermatology_metadata" in retriever_source,
             "neo4j_graph_context": "Neo4jGraphStore" in retriever_source,
             "neo4j_canonical_name_compatible": "canonical_name" in graph_store_source,
-            "entity_collection_runtime_retrieval": "acne_entities_v1" in retriever_source
-            or "get_entity_collection_name" in retriever_source,
-            "drug_entity_normalizer_runtime": "DrugEntityNormalizer" in retriever_source,
+            "entity_collection_runtime_retrieval": "EntityRetriever" in retriever_source
+            and "get_entity_collection_name" in entity_retriever_source,
+            "drug_entity_normalizer_runtime": "normalize_query" in retriever_source
+            and "DrugEntityNormalizer" in query_normalization_source,
+            "taxonomy_query_expansion": "expand_normalized_query" in retriever_source,
+            "metadata_aware_chunk_boost": "boost_chunk_results" in retriever_source,
+            "candidate_merge_trace": "RetrievalTrace" in retriever_source,
         },
         "deferred_phase2_features": [
-            "Route retrieval through acne_entities_v1 entity cards before chunk expansion.",
-            "Use DrugEntityNormalizer/query intent metadata at runtime, not only legacy metadata boost.",
-            "Add entity-aware context selection over drug_product, active_ingredient, drug_class, route, and safety_context.",
-            "Use deterministic Neo4j graph as structured expansion, not only graph_nodes/keyword fallback.",
+            "Add production reranking over merged entity/chunk candidates.",
+            "Add advanced context packing across entity cards, chunks, and graph facts.",
+            "Use deterministic Neo4j graph for deeper structured expansion beyond 1-hop supplemental facts.",
+            "Web fallback is intentionally not implemented.",
         ],
     }
 

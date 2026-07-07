@@ -25,6 +25,12 @@ from typing import Any
 
 from src.database.graph_store import Neo4jGraphStore
 from src.database.vector_store import QdrantVectorStore, embed_query
+from src.retrieval.candidate_merge import candidate_debug_summary, merge_candidates
+from src.retrieval.contracts import RetrievalTrace
+from src.retrieval.entity_retriever import EntityRetriever
+from src.retrieval.metadata_boost import boost_chunk_results
+from src.retrieval.query_expansion import expand_normalized_query
+from src.retrieval.query_normalization import normalize_query
 
 # Phase 1.5 — Dermatology-aware query boost
 from src.ingestion.domain_metadata import extract_dermatology_metadata
@@ -229,6 +235,7 @@ class HybridRetriever:
     def __init__(self) -> None:
         self._vector_store = QdrantVectorStore()
         self._graph_store = Neo4jGraphStore()
+        self._entity_retriever = EntityRetriever()
 
     async def retrieve(
         self,
@@ -254,6 +261,13 @@ class HybridRetriever:
             RRF constant (default 60, higher = more conservative fusion).
         """
         t_start = time.time()
+        warnings: list[str] = []
+
+        # ── Phase 2A: normalize + taxonomy expansion ────────────────
+        t_norm_start = time.time()
+        normalized_query = normalize_query(query)
+        expansion = expand_normalized_query(normalized_query)
+        t_norm = time.time() - t_norm_start
 
         # ── Step 1: Embed query ──────────────────────────────────────
         t_embed_start = time.time()
@@ -274,8 +288,9 @@ class HybridRetriever:
 
         # ── Step 3: Sparse BM25 search ───────────────────────────────
         t_sparse_start = time.time()
+        sparse_query = " ".join(expansion.expanded_terms) or query
         sparse_results = await self._vector_store.search_sparse(
-            text=query,
+            text=sparse_query,
             top_k=fetch_k,
         )
         t_sparse = time.time() - t_sparse_start
@@ -301,21 +316,62 @@ class HybridRetriever:
         t_boost_start = time.time()
         query_metadata = extract_query_dermatology_metadata(query)
         boosted = apply_metadata_boost(fused, query_metadata)
+
+        chunk_candidates = boost_chunk_results(
+            boosted,
+            normalized_query=normalized_query,
+            collection_name=self._vector_store._collection,
+        )
         t_boost = time.time() - t_boost_start
 
-        boost_count = sum(1 for r in boosted if r.get("metadata_boost_applied"))
+        boost_count = sum(
+            1
+            for candidate in chunk_candidates
+            if candidate.debug.get("metadata_boost", 0.0)
+        )
         logger.info(
             "Metadata boost: %d/%d results boosted in %.4fs",
             boost_count,
-            len(boosted),
+            len(chunk_candidates),
             t_boost,
         )
 
-        top_chunks = prioritize_main_contexts(boosted, top_k)
+        # ── Step 4.6: Entity-card retrieval + candidate merge ────────
+        t_entity_start = time.time()
+        entity_candidates = []
+        try:
+            entity_candidates = await self._entity_retriever.retrieve(
+                normalized_query=normalized_query,
+                expansion=expansion,
+                limit=8,
+            )
+        except Exception as exc:
+            warning = f"Entity retrieval skipped: {exc}"
+            warnings.append(warning)
+            logger.warning(warning)
+        t_entity = time.time() - t_entity_start
+
+        merged_candidates = merge_candidates(
+            entity_candidates=entity_candidates,
+            chunk_candidates=chunk_candidates,
+            normalized_query=normalized_query,
+            limit=max(top_k * 2, 8),
+        )
+        selected_candidates = _select_context_candidates(
+            merged_candidates,
+            chunk_candidates,
+            top_k=top_k,
+        )
+        top_chunks = prioritize_main_contexts(
+            [_candidate_to_context(candidate) for candidate in selected_candidates],
+            top_k,
+        )
 
         # ── Step 5: Extract graph_nodes from Qdrant payloads ────────
         entity_names: set[str] = set()
         for chunk in top_chunks:
+            if chunk.get("retrieval_source") == "entity" and chunk.get("canonical_name"):
+                entity_names.add(str(chunk["canonical_name"]))
             graph_nodes = chunk.get("graph_nodes", [])
             if isinstance(graph_nodes, list):
                 entity_names.update(
@@ -349,10 +405,30 @@ class HybridRetriever:
         sources = list(dict.fromkeys(
             c.get("source_file", "")
             for c in top_chunks
-            if c.get("source_file")
+            if c.get("source_file") and c.get("retrieval_source") != "entity"
         ))[:2]
 
         t_total = time.time() - t_start
+        trace = RetrievalTrace(
+            original_query=query,
+            normalized_query=normalized_query,
+            expansion=expansion,
+            entity_candidates=entity_candidates[:8],
+            chunk_candidates=chunk_candidates[:8],
+            merged_candidates=merged_candidates[:8],
+            selected_context=selected_candidates,
+            warnings=warnings,
+            timings_ms={
+                "normalize_expand": round(t_norm * 1000, 3),
+                "embed": round(t_embed * 1000, 3),
+                "dense": round(t_dense * 1000, 3),
+                "sparse": round(t_sparse * 1000, 3),
+                "boost": round(t_boost * 1000, 3),
+                "entity": round(t_entity * 1000, 3),
+                "neo4j": round(t_neo4j * 1000, 3),
+                "total": round(t_total * 1000, 3),
+            },
+        )
 
         return RetrievalResult(
             vector_contexts=top_chunks,
@@ -361,19 +437,48 @@ class HybridRetriever:
             query=query,
             metadata={
                 "total_time_s": round(t_total, 3),
+                "normalize_expand_time_s": round(t_norm, 3),
                 "embed_time_s": round(t_embed, 3),
                 "dense_time_s": round(t_dense, 3),
                 "sparse_time_s": round(t_sparse, 3),
                 "boost_time_s": round(t_boost, 3),
+                "entity_time_s": round(t_entity, 3),
                 "neo4j_time_s": round(t_neo4j, 3),
                 "dense_count": len(dense_results),
                 "sparse_count": len(sparse_results),
                 "fused_count": len(fused),
                 "boosted_count": boost_count,
+                "entity_count": len(entity_candidates),
+                "merged_count": len(merged_candidates),
                 "top_k": top_k,
                 "entity_names_count": len(entity_names),
                 "graph_facts_count": len(graph_facts),
                 "query_metadata": query_metadata,
+                "phase2a": {
+                    "intent": normalized_query.intent,
+                    "normalized_entities": {
+                        "drug_product": normalized_query.drug_product,
+                        "active_ingredient": normalized_query.active_ingredient,
+                        "drug_class": normalized_query.drug_class,
+                        "condition": normalized_query.condition,
+                        "safety_context": normalized_query.safety_context,
+                    },
+                    "expanded_terms": expansion.expanded_terms,
+                    "top_entity_candidates": [
+                        candidate_debug_summary(candidate)
+                        for candidate in entity_candidates[:5]
+                    ],
+                    "top_chunk_candidates": [
+                        candidate_debug_summary(candidate)
+                        for candidate in chunk_candidates[:5]
+                    ],
+                    "merged_candidates": [
+                        candidate_debug_summary(candidate)
+                        for candidate in merged_candidates[:5]
+                    ],
+                    "warnings": warnings,
+                },
+                "retrieval_trace": trace.model_dump(mode="json"),
             },
         )
 
@@ -453,3 +558,32 @@ class HybridRetriever:
             await self._graph_store.close()
         except Exception as exc:
             logger.warning("Error closing graph store: %s", exc)
+        try:
+            await self._entity_retriever.close()
+        except Exception as exc:
+            logger.warning("Error closing entity retriever: %s", exc)
+
+
+def _select_context_candidates(
+    merged_candidates: list[Any],
+    chunk_candidates: list[Any],
+    top_k: int,
+) -> list[Any]:
+    selected = merged_candidates[:top_k]
+    if not any(candidate.source == "chunk" for candidate in selected):
+        selected = [*selected[: max(top_k - 1, 0)], *chunk_candidates[:1]]
+    return selected[:top_k]
+
+
+def _candidate_to_context(candidate: Any) -> dict[str, Any]:
+    payload = dict(candidate.payload)
+    payload["text"] = candidate.text
+    payload["score"] = candidate.fused_score if candidate.fused_score is not None else candidate.score
+    payload["retrieval_source"] = candidate.source
+    payload["matched_metadata"] = candidate.matched_metadata
+    payload["retrieval_debug"] = candidate.debug
+    if candidate.source == "entity":
+        payload.setdefault("source_file", f"entity:{candidate.collection}")
+        payload.setdefault("header", payload.get("entity_type", "entity"))
+        payload.setdefault("context_role", "entity")
+    return payload

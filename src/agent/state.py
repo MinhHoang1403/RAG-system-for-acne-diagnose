@@ -33,6 +33,7 @@ class ClinicalState(TypedDict):
     vector_contexts: list[dict[str, Any]]
     graph_facts: list[dict[str, Any]]
     sources: list[str]
+    retrieval_trace: dict[str, Any] | None
     
     # Reasoning & Generation
     safety_flags: list[str]
