@@ -239,7 +239,14 @@ Phase 2C bổ sung local/offline-first reranking:
 - `RERANK_ENABLED=false` tắt reranker; `RERANK_TOP_N` và `RERANK_PROVIDER` điều chỉnh runtime.
 - `local_model` chỉ là extension point có fallback về `local_rules`, không tự tải model.
 
-Giới hạn hiện tại: chưa có external rerank provider/model thật, chưa có advanced medical answer verifier, chưa có web fallback và chưa có Neo4j expansion sâu hơn.
+Phase 2D bổ sung answer quality verifier/guard deterministic:
+
+- Kiểm tra offline các mâu thuẫn phổ biến như benzoyl peroxide/adapalene bị gọi nhầm là kháng sinh, clindamycin bị gọi nhầm là retinoid, câu trả lời loại mụn bị drift thành danh sách thuốc, và cảnh báo an toàn retinoid/isotretinoin.
+- Runtime graph chạy node `answer_quality` sau finalize và trước cache store. Mặc định `ANSWER_GUARD_MODE=metadata_only`, chỉ ghi metadata/report và không tự sửa answer.
+- `scripts/eval_phase2_answer_quality.py` chạy golden cases offline, không gọi LLM/embedding/API ngoài.
+- `scripts/smoke_phase2_runtime.py --mode offline` chạy smoke retrieval/rerank/context/quality bằng dữ liệu taxonomy local. `--live-chat` mới gọi runtime chat và có thể gọi LLM theo cấu hình.
+
+Giới hạn hiện tại: chưa có external rerank provider/model thật, chưa có LLM-backed medical reviewer, chưa có web fallback, chưa có Neo4j expansion sâu hơn và chưa thay thế được clinical safety engine.
 
 Validation:
 
@@ -247,6 +254,8 @@ Validation:
 .\venv\Scripts\python.exe scripts\eval_phase2_retrieval.py
 .\venv\Scripts\python.exe scripts\eval_phase2_context_packing.py
 .\venv\Scripts\python.exe scripts\eval_phase2_reranking.py
+.\venv\Scripts\python.exe scripts\eval_phase2_answer_quality.py
+.\venv\Scripts\python.exe scripts\smoke_phase2_runtime.py --mode offline
 .\venv\Scripts\python.exe scripts\inspect_phase2_readiness.py
 .\venv\Scripts\python.exe scripts\validate_phase1_complete.py
 .\venv\Scripts\python.exe -m pytest tests -q --no-cov
@@ -566,6 +575,18 @@ Diagnostics hữu ích:
 ```
 
 Smoke questions thủ công cho `/chat` sau khi Phase 2 chạy:
+
+Chạy smoke offline trước:
+
+```powershell
+.\venv\Scripts\python.exe scripts\smoke_phase2_runtime.py --mode offline
+```
+
+Chỉ dùng live chat smoke khi đã chủ động chấp nhận gọi provider chat theo `.env`:
+
+```powershell
+.\venv\Scripts\python.exe scripts\smoke_phase2_runtime.py --live-chat
+```
 
 ```text
 1. Benzoyl peroxide dùng để làm gì trong điều trị mụn trứng cá?

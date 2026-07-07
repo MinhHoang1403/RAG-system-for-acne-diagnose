@@ -323,13 +323,20 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
     intent = infer_cache_intent(target_question, guard_status)
     
     # Build metadata to store
+    answer_quality_report = state.get("answer_quality_report") or {}
+    quality_passed = answer_quality_report.get("passed") if isinstance(answer_quality_report, dict) else None
     metadata = {
         "provider": state.get("actual_provider"),
         "model": state.get("actual_model"),
         "retrieval": "hybrid_qdrant_neo4j" if state.get("sources") else "skipped",
         "quality_checked": True,
-        "quality_passed": True,
-        "quality_reason": "passed_all_gates",
+        "quality_passed": bool(quality_passed) if quality_passed is not None else True,
+        "quality_reason": "passed_answer_verifier" if quality_passed is not False else "answer_verifier_failed",
+        "answer_quality_issues": (
+            answer_quality_report.get("issues", [])
+            if isinstance(answer_quality_report, dict)
+            else []
+        ),
         "answer_version": os.getenv("CACHE_ANSWER_VERSION", "v4"),
         "raw_question": raw_question,
         "standalone_question": standalone_q or "",

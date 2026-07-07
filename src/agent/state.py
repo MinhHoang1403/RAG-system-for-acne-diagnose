@@ -40,6 +40,9 @@ class ClinicalState(TypedDict):
     safety_flags: list[str]
     draft_answer: str
     final_answer: str
+    answer_quality_report: dict[str, Any] | None
+    answer_guard_modified: bool | None
+    answer_guard_mode: str | None
     
     # Error handling
     errors: list[str]

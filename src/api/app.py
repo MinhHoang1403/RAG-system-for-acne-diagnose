@@ -514,6 +514,7 @@ async def chat_endpoint(request: ChatRequest):
         sources_list = result.get("sources", [])
         symptoms_list = result.get("symptoms", [])
         safety_flags_list = result.get("safety_flags", [])
+        answer_quality_report = result.get("answer_quality_report") or {}
         
         # Build safe metadata dict for DB storage (no API keys, no raw exceptions)
         safe_db_metadata = {
@@ -526,6 +527,22 @@ async def chat_endpoint(request: ChatRequest):
             "is_in_domain": is_in_domain,
             "guardrail": result.get("guardrail"),
             "used_retrieval": used_retrieval,
+            "answer_quality": {
+                "checked": bool(answer_quality_report),
+                "passed": answer_quality_report.get("passed") if isinstance(answer_quality_report, dict) else None,
+                "issue_count": len(answer_quality_report.get("issues", [])) if isinstance(answer_quality_report, dict) else 0,
+                "critical_count": (
+                    sum(
+                        1
+                        for issue in answer_quality_report.get("issues", [])
+                        if isinstance(issue, dict) and issue.get("severity") == "critical"
+                    )
+                    if isinstance(answer_quality_report, dict)
+                    else 0
+                ),
+                "guard_modified": result.get("answer_guard_modified"),
+                "guard_mode": result.get("answer_guard_mode"),
+            },
             "cache": {
                 "enabled": bool(result.get("cache_enabled", os.getenv("CACHE_ENABLED", "true").lower() == "true")),
                 "checked": bool(result.get("cache_checked")),

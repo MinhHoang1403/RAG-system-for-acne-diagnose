@@ -195,6 +195,12 @@ def inspect_runtime_code() -> dict[str, Any]:
     query_normalization_source = (PROJECT_ROOT / "src" / "retrieval" / "query_normalization.py").read_text(encoding="utf-8")
     context_packer_source = (PROJECT_ROOT / "src" / "retrieval" / "context_packer.py").read_text(encoding="utf-8")
     reranker_source = (PROJECT_ROOT / "src" / "retrieval" / "reranker.py").read_text(encoding="utf-8")
+    agent_graph_source = (PROJECT_ROOT / "src" / "agent" / "graph.py").read_text(encoding="utf-8")
+    answer_verifier_path = PROJECT_ROOT / "src" / "quality" / "answer_verifier.py"
+    answer_quality_eval_path = PROJECT_ROOT / "scripts" / "eval_phase2_answer_quality.py"
+    runtime_smoke_path = PROJECT_ROOT / "scripts" / "smoke_phase2_runtime.py"
+    answer_verifier_source = answer_verifier_path.read_text(encoding="utf-8") if answer_verifier_path.exists() else ""
+    runtime_smoke_source = runtime_smoke_path.read_text(encoding="utf-8") if runtime_smoke_path.exists() else ""
 
     return {
         "current_capabilities": {
@@ -220,13 +226,22 @@ def inspect_runtime_code() -> dict[str, Any]:
             and "local_rules" in reranker_source,
             "reranking_integrated": "rerank_candidates" in retriever_source
             and "rerank_trace" in retriever_source,
+            "answer_quality_verifier_available": "def verify_answer_quality" in answer_verifier_source
+            and "def apply_answer_guard" in answer_verifier_source,
+            "answer_guard_integrated": "answer_quality" in agent_graph_source
+            and "cache_store" in agent_graph_source,
+            "answer_quality_eval_available": answer_quality_eval_path.exists(),
+            "runtime_smoke_available": runtime_smoke_path.exists(),
+            "offline_smoke_available": "def run_offline_smoke" in runtime_smoke_source
+            and "--live-chat" in runtime_smoke_source,
         },
         "rerank_provider_default": _display_rerank_provider(),
         "deferred_phase2_features": [
             "Add external rerank provider or installed local model reranker.",
-            "Add advanced medical answer verifier over generated answers.",
+            "Add optional LLM-backed medical answer reviewer for complex answers.",
             "Use deterministic Neo4j graph for deeper structured expansion beyond 1-hop supplemental facts.",
             "Web fallback is intentionally not implemented.",
+            "Full clinical safety engine is intentionally out of scope for this deterministic guard.",
         ],
     }
 
@@ -260,7 +275,7 @@ async def main() -> int:
         "runtime_config": runtime_config,
         "phase1_state_checks": checks,
         **runtime_code,
-        "recommended_next_step": "Phase 2D: answer verification, optional external/local-model reranker, and deeper deterministic Neo4j expansion.",
+        "recommended_next_step": "Run Phase 2D offline answer quality and runtime smoke evals before any live chat smoke.",
     }
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     return 0 if report["passed"] else 1
