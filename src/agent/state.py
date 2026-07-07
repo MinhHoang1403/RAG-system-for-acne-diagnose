@@ -40,6 +40,9 @@ class ClinicalState(TypedDict):
     pipeline_manifest: dict[str, Any] | None
     pipeline_fingerprint: str | None
     observability_exported: bool | None
+    runtime_budget: Any
+    runtime_resilience_settings: dict[str, Any] | None
+    runtime_resilience: dict[str, Any] | None
     
     # Reasoning & Generation
     safety_flags: list[str]

@@ -4,6 +4,7 @@ src/agent/graph.py
 Main definition of the LangGraph workflow for Acne Advisor AI.
 """
 
+import asyncio
 import logging
 from typing import Any
 
@@ -29,6 +30,9 @@ from src.observability.versioning import (
     build_pipeline_version_manifest,
     compute_pipeline_fingerprint,
 )
+from src.resilience.budget import DeadlineBudget
+from src.resilience.contracts import runtime_resilience_settings_from_env
+from src.resilience.exceptions import AgentTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +127,8 @@ async def run_clinical_agent(
     
     pipeline_manifest = build_pipeline_version_manifest()
     pipeline_fingerprint = compute_pipeline_fingerprint(pipeline_manifest)
+    resilience_settings = runtime_resilience_settings_from_env()
+    runtime_budget = DeadlineBudget.from_timeout(resilience_settings.agent_total_timeout_seconds)
 
     # Initialize state
     initial_state = {
@@ -143,6 +149,13 @@ async def run_clinical_agent(
         "pipeline_manifest": pipeline_manifest,
         "pipeline_fingerprint": pipeline_fingerprint,
         "observability_exported": None,
+        "runtime_budget": runtime_budget,
+        "runtime_resilience_settings": resilience_settings.model_dump(mode="json"),
+        "runtime_resilience": {
+            "runtime_resilience_version": pipeline_manifest.get("runtime_resilience_version"),
+            "agent_total_timeout_seconds": resilience_settings.agent_total_timeout_seconds,
+            "deadline_started": True,
+        },
         "safety_flags": [],
         "draft_answer": "",
         "final_answer": "",
@@ -171,7 +184,15 @@ async def run_clinical_agent(
     }
     
     # Invoke the graph asynchronously
-    final_state = await clinical_graph.ainvoke(initial_state)
+    try:
+        async with asyncio.timeout(runtime_budget.remaining_seconds()):
+            final_state = await clinical_graph.ainvoke(initial_state)
+    except asyncio.CancelledError:
+        raise
+    except TimeoutError as exc:
+        raise AgentTimeoutError(
+            f"Agent exceeded total timeout of {resilience_settings.agent_total_timeout_seconds:.1f}s."
+        ) from exc
     
     # Format and return the output
     return {
@@ -188,6 +209,7 @@ async def run_clinical_agent(
         "pipeline_manifest": final_state.get("pipeline_manifest"),
         "pipeline_fingerprint": final_state.get("pipeline_fingerprint"),
         "observability_exported": final_state.get("observability_exported"),
+        "runtime_resilience": final_state.get("runtime_resilience"),
         "answer_quality_report": final_state.get("answer_quality_report"),
         "answer_guard_modified": final_state.get("answer_guard_modified"),
         "answer_guard_mode": final_state.get("answer_guard_mode"),

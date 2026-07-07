@@ -6,6 +6,7 @@ Exposes the LangGraph Agent via REST endpoints.
 Includes chat history persistence to PostgreSQL.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -28,6 +29,15 @@ logger = logging.getLogger(__name__)
 from src.agent.main import run_clinical_agent
 from src.agent.text_encoding import repair_mojibake
 from src.observability.versioning import get_answer_cache_version
+from src.resilience.exceptions import (
+    AgentTimeoutError,
+    CircuitOpenError,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+    RetryExhaustedError,
+    RuntimeResilienceError,
+    StageTimeoutError,
+)
 
 # Input Control Config
 MAX_MESSAGE_CHARS = int(os.getenv("MAX_MESSAGE_CHARS", 500))
@@ -39,6 +49,35 @@ CACHE_ANSWER_VERSION = get_answer_cache_version()
 
 # In-memory lock for session requests
 active_requests = set()
+
+
+def _http_status_for_resilience_error(exc: RuntimeResilienceError) -> int:
+    if isinstance(exc, (AgentTimeoutError, StageTimeoutError, ProviderTimeoutError)):
+        return 504
+    if isinstance(exc, (CircuitOpenError, ProviderUnavailableError, RetryExhaustedError)):
+        return 503
+    return 503
+
+
+def _safe_resilience_detail(exc: RuntimeResilienceError) -> dict[str, Any]:
+    code = getattr(exc, "error_code", "runtime_resilience_error")
+    retryable = bool(getattr(exc, "retryable", True))
+    if isinstance(exc, AgentTimeoutError):
+        message = "Yêu cầu xử lý quá thời gian cho phép. Vui lòng thử lại sau ít phút."
+    elif isinstance(exc, StageTimeoutError):
+        message = "Một bước xử lý mất quá nhiều thời gian. Vui lòng thử lại sau."
+    elif isinstance(exc, ProviderTimeoutError):
+        message = "Dịch vụ tạo câu trả lời phản hồi quá chậm. Vui lòng thử lại."
+    elif isinstance(exc, CircuitOpenError):
+        message = "Dịch vụ tạo câu trả lời đang tạm ngưng do lỗi lặp lại. Vui lòng thử lại sau."
+    else:
+        message = "Dịch vụ tạo câu trả lời hiện chưa khả dụng. Vui lòng thử lại sau."
+    return {
+        "code": code,
+        "message": message,
+        "retryable": retryable,
+        "error_type": exc.__class__.__name__,
+    }
 
 
 def _repair_history_messages(messages: list["ChatHistoryMessage"]) -> list["ChatHistoryMessage"]:
@@ -532,6 +571,7 @@ async def chat_endpoint(request: ChatRequest):
                 "pipeline_fingerprint": pipeline_fingerprint,
                 "pipeline_phase": pipeline_manifest.get("phase") if isinstance(pipeline_manifest, dict) else None,
                 "observability_exported": result.get("observability_exported"),
+                "runtime_resilience": result.get("runtime_resilience"),
                 "answer_quality": {
                     "passed": answer_quality_report.get("passed") if isinstance(answer_quality_report, dict) else None,
                     "issue_count": len(answer_quality_report.get("issues", [])) if isinstance(answer_quality_report, dict) else 0,
@@ -583,7 +623,8 @@ async def chat_endpoint(request: ChatRequest):
                 "quality_checked": result.get("cache_metadata", {}).get("quality_checked") if result.get("cache_hit") else None,
                 "quality_passed": result.get("cache_metadata", {}).get("quality_passed") if result.get("cache_hit") else None,
                 "quality_reason": result.get("cache_metadata", {}).get("quality_reason") if result.get("cache_hit") else None
-            }
+            },
+            "runtime_resilience": result.get("runtime_resilience"),
         }
         
         # If cache hit, retrieve original model info
@@ -653,6 +694,14 @@ async def chat_endpoint(request: ChatRequest):
             )
         )
         
+    except asyncio.CancelledError:
+        raise
+    except RuntimeResilienceError as e:
+        logger.warning("Runtime resilience error processing chat request: %s", e)
+        raise HTTPException(
+            status_code=_http_status_for_resilience_error(e),
+            detail=_safe_resilience_detail(e),
+        )
     except Exception as e:
         logger.error(f"Error processing chat request: {str(e)}")
         # Return generic 500 error without leaking sensitive info

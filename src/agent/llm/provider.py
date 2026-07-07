@@ -4,6 +4,7 @@ src/agent/llm/provider.py
 Abstraction for LLM providers (Gemini, Ollama) with fallback support.
 """
 
+import asyncio
 import os
 import logging
 import google.generativeai as genai
@@ -11,10 +12,62 @@ from typing import Optional
 
 from src.agent.llm.ollama_client import generate_ollama_response, list_ollama_models
 from src.agent.text_encoding import repair_mojibake
+from src.resilience.budget import DeadlineBudget
+from src.resilience.circuit_breaker import CircuitBreaker, InMemoryCircuitStateStore
+from src.resilience.contracts import RuntimeResilienceSettings, runtime_resilience_settings_from_env
+from src.resilience.exceptions import (
+    CircuitOpenError,
+    PermanentProviderError,
+    RuntimeResilienceError,
+)
+from src.resilience.provider import call_provider_with_resilience
+from src.resilience.retry import RetryPolicy
 
 logger = logging.getLogger(__name__)
 
-async def _call_gemini(prompt: str, system_prompt: Optional[str], model_name: str, temperature: float) -> str:
+_CIRCUIT_STORE = InMemoryCircuitStateStore()
+_CIRCUIT_BREAKER = CircuitBreaker(runtime_resilience_settings_from_env(), store=_CIRCUIT_STORE)
+
+
+def _refresh_circuit_breaker(settings: RuntimeResilienceSettings) -> CircuitBreaker:
+    global _CIRCUIT_BREAKER
+    _CIRCUIT_BREAKER = CircuitBreaker(settings, store=_CIRCUIT_STORE)
+    return _CIRCUIT_BREAKER
+
+
+def _retry_policy(settings: RuntimeResilienceSettings) -> RetryPolicy:
+    return RetryPolicy(
+        max_retries=settings.llm_max_retries,
+        base_delay_seconds=settings.llm_retry_base_delay_seconds,
+        max_delay_seconds=settings.llm_retry_max_delay_seconds,
+    )
+
+
+def _resolve_model(provider: str, model: Optional[str]) -> tuple[str, str]:
+    provider = (provider or "gemini").lower()
+    if provider == "local":
+        provider = "ollama"
+    if provider == "gemini":
+        resolved = model or os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
+        if resolved == "gemini-1.5-flash":
+            resolved = "gemini-2.5-flash"
+        return provider, resolved
+    if provider == "ollama":
+        configured_model = os.getenv("OLLAMA_MODEL", "qwen2.5")
+        resolved = model or configured_model
+        if ":" not in resolved:
+            resolved = f"{resolved}:latest"
+        return provider, resolved
+    return provider, model or ""
+
+
+async def _call_gemini(
+    prompt: str,
+    system_prompt: Optional[str],
+    model_name: str,
+    temperature: float,
+    request_timeout: float | None = None,
+) -> str:
     """Helper to call Gemini API."""
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -29,13 +82,34 @@ async def _call_gemini(prompt: str, system_prompt: Optional[str], model_name: st
         final_prompt = f"{system_prompt}\n\n{prompt}"
         
     model = genai.GenerativeModel(model_name)
+    async def _generate() -> str:
+        request_kwargs = {}
+        if request_timeout and request_timeout > 0:
+            request_kwargs["request_options"] = {"timeout": request_timeout}
+        response = await model.generate_content_async(
+            final_prompt,
+            generation_config=genai.GenerationConfig(temperature=temperature),
+            **request_kwargs,
+        )
+        return response.text
+
+    if request_timeout and request_timeout > 0:
+        async with asyncio.timeout(request_timeout):
+            return await _generate()
+
     response = await model.generate_content_async(
         final_prompt,
         generation_config=genai.GenerationConfig(temperature=temperature)
     )
     return response.text
 
-async def _call_gemini_sync(prompt: str, system_prompt: Optional[str], model_name: str, temperature: float) -> str:
+async def _call_gemini_sync(
+    prompt: str,
+    system_prompt: Optional[str],
+    model_name: str,
+    temperature: float,
+    request_timeout: float | None = None,
+) -> str:
     """Helper to call Gemini API synchronously."""
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -46,12 +120,95 @@ async def _call_gemini_sync(prompt: str, system_prompt: Optional[str], model_nam
     if system_prompt:
         final_prompt = f"{system_prompt}\n\n{prompt}"
         
-    model = genai.GenerativeModel(model_name)
-    response = model.generate_content(
-        final_prompt,
-        generation_config=genai.GenerationConfig(temperature=temperature)
+    def _generate_sync() -> str:
+        request_kwargs = {}
+        if request_timeout and request_timeout > 0:
+            request_kwargs["request_options"] = {"timeout": request_timeout}
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(
+            final_prompt,
+            generation_config=genai.GenerationConfig(temperature=temperature),
+            **request_kwargs,
+        )
+        return response.text
+
+    if request_timeout and request_timeout > 0:
+        async with asyncio.timeout(request_timeout):
+            return await asyncio.to_thread(_generate_sync)
+    return await asyncio.to_thread(_generate_sync)
+
+
+async def _call_provider_once(
+    *,
+    provider: str,
+    model: str,
+    prompt: str,
+    system_prompt: Optional[str],
+    temperature: float,
+    use_sync: bool,
+    request_timeout: float,
+) -> str:
+    if provider == "gemini":
+        logger.info("Calling Gemini (%s)...", model)
+        if use_sync:
+            return repair_mojibake(
+                await _call_gemini_sync(prompt, system_prompt, model, temperature, request_timeout)
+            )
+        return repair_mojibake(
+            await _call_gemini(prompt, system_prompt, model, temperature, request_timeout)
+        )
+
+    if provider == "ollama":
+        logger.info("Calling Ollama (%s)...", model)
+        return repair_mojibake(
+            await generate_ollama_response(
+                model,
+                system_prompt,
+                prompt,
+                temperature,
+                request_timeout=request_timeout,
+            )
+        )
+
+    raise ValueError(f"Unknown provider: {provider}")
+
+
+async def _call_provider_resilient(
+    *,
+    provider: str,
+    model: str,
+    prompt: str,
+    system_prompt: Optional[str],
+    temperature: float,
+    use_sync: bool,
+    budget: DeadlineBudget,
+    settings: RuntimeResilienceSettings,
+) -> tuple[str, dict]:
+    timeout_seconds = (
+        settings.gemini_timeout_seconds
+        if provider == "gemini"
+        else settings.ollama_timeout_seconds
     )
-    return response.text
+
+    async def operation(effective_timeout: float) -> str:
+        return await _call_provider_once(
+            provider=provider,
+            model=model,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            use_sync=use_sync,
+            request_timeout=effective_timeout,
+        )
+
+    return await call_provider_with_resilience(
+        provider_name=provider,
+        operation=operation,
+        budget=budget,
+        timeout_seconds=timeout_seconds,
+        retry_policy=_retry_policy(settings),
+        circuit_breaker=_refresh_circuit_breaker(settings),
+    )
 
 async def generate_llm_response(
     prompt: str,
@@ -60,7 +217,9 @@ async def generate_llm_response(
     model: Optional[str] = None,
     temperature: float = 0.2,
     allow_fallback: bool = True,
-    use_sync: bool = False
+    use_sync: bool = False,
+    budget: DeadlineBudget | None = None,
+    resilience_settings: RuntimeResilienceSettings | None = None,
 ) -> dict:
     """
     Generate LLM response with automatic fallback logic.
@@ -75,19 +234,10 @@ async def generate_llm_response(
             "error": str | None
         }
     """
-    provider = provider or "gemini"
+    settings = resilience_settings or runtime_resilience_settings_from_env()
+    budget = budget or DeadlineBudget.from_timeout(settings.agent_total_timeout_seconds)
+    provider, model = _resolve_model(provider or "gemini", model)
     
-    # Resolve default models
-    if provider == "gemini":
-        model = model or os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
-        if model == "gemini-1.5-flash":
-            model = "gemini-2.5-flash"
-    elif provider == "ollama":
-        configured_model = os.getenv("OLLAMA_MODEL", "qwen2.5")
-        model = model or (
-            configured_model if ":" in configured_model else f"{configured_model}:latest"
-        )
-        
     result = {
         "text": "",
         "provider": provider,
@@ -95,33 +245,44 @@ async def generate_llm_response(
         "fallback_used": False,
         "fallback_provider": None,
         "fallback_model": None,
-        "error": None
+        "error": None,
+        "resilience": None,
     }
     
     try:
         # 1. Try primary provider
-        if provider == "gemini":
-            logger.info(f"Calling Gemini ({model})...")
-            if use_sync:
-                result["text"] = repair_mojibake(
-                    await _call_gemini_sync(prompt, system_prompt, model, temperature)
-                ) # wrapper is still async
-            else:
-                result["text"] = repair_mojibake(
-                    await _call_gemini(prompt, system_prompt, model, temperature)
-                )
-            return result
+        text, resilience_meta = await _call_provider_resilient(
+            provider=provider,
+            model=model,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            use_sync=use_sync,
+            budget=budget,
+            settings=settings,
+        )
+        result["text"] = text
+        result["resilience"] = resilience_meta
+        return result
             
-        elif provider == "ollama":
-            logger.info(f"Calling Ollama ({model})...")
-            result["text"] = repair_mojibake(
-                await generate_ollama_response(model, system_prompt, prompt, temperature)
-            )
-            return result
-            
-        else:
-            raise ValueError(f"Unknown provider: {provider}")
-            
+    except asyncio.CancelledError:
+        raise
+    except PermanentProviderError as e:
+        logger.warning("Primary LLM (%s/%s) failed permanently: %s", provider, model, e)
+        result["error"] = str(e)
+        raise
+    except CircuitOpenError as e:
+        logger.warning("Primary LLM circuit is open (%s/%s): %s", provider, model, e)
+        if not allow_fallback:
+            result["error"] = str(e)
+            raise
+        primary_error = e
+    except RuntimeResilienceError as e:
+        logger.warning("Primary LLM (%s/%s) failed: %s", provider, model, e)
+        if not allow_fallback:
+            result["error"] = str(e)
+            raise
+        primary_error = e
     except Exception as e:
         logger.warning(f"Primary LLM ({provider}/{model}) failed: {e}")
         
@@ -130,12 +291,15 @@ async def generate_llm_response(
             logger.error("Fallback is disabled. Failing.")
             result["error"] = str(e)
             raise e
-            
+
+        primary_error = e
+
+    try:
         logger.info("Attempting fallback...")
         
         if provider == "gemini":
             # Fallback to Ollama
-            available_models = await list_ollama_models()
+            available_models = await list_ollama_models(timeout_seconds=min(5.0, budget.remaining_seconds()))
             fallback_model = None
             configured_model = os.getenv("OLLAMA_MODEL", "qwen2.5")
             configured_model = (
@@ -153,22 +317,32 @@ async def generate_llm_response(
             if fallback_model:
                 try:
                     logger.info(f"Fallback to Ollama ({fallback_model})...")
-                    text = repair_mojibake(
-                        await generate_ollama_response(fallback_model, system_prompt, prompt, temperature)
+                    text, resilience_meta = await _call_provider_resilient(
+                        provider="ollama",
+                        model=fallback_model,
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        temperature=temperature,
+                        use_sync=use_sync,
+                        budget=budget,
+                        settings=settings,
                     )
                     result["text"] = text
+                    result["resilience"] = resilience_meta
                     result["fallback_used"] = True
                     result["fallback_provider"] = "ollama"
                     result["fallback_model"] = fallback_model
                     return result
                 except Exception as fb_err:
                     logger.error(f"Fallback Ollama also failed: {fb_err}")
-                    result["error"] = f"Primary ({e}) and Fallback ({fb_err}) both failed."
+                    if isinstance(fb_err, RuntimeResilienceError):
+                        raise fb_err
+                    result["error"] = f"Primary ({primary_error}) and Fallback ({fb_err}) both failed."
                     raise Exception(result["error"])
             else:
                 logger.error("No suitable Ollama models available for fallback.")
-                result["error"] = str(e)
-                raise e
+                result["error"] = str(primary_error)
+                raise primary_error
                 
         elif provider == "ollama":
             # Fallback to Gemini
@@ -178,20 +352,28 @@ async def generate_llm_response(
                 
             try:
                 logger.info(f"Fallback to Gemini ({fallback_model})...")
-                if use_sync:
-                    text = repair_mojibake(
-                        await _call_gemini_sync(prompt, system_prompt, fallback_model, temperature)
-                    )
-                else:
-                    text = repair_mojibake(
-                        await _call_gemini(prompt, system_prompt, fallback_model, temperature)
-                    )
+                text, resilience_meta = await _call_provider_resilient(
+                    provider="gemini",
+                    model=fallback_model,
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    temperature=temperature,
+                    use_sync=use_sync,
+                    budget=budget,
+                    settings=settings,
+                )
                 result["text"] = text
+                result["resilience"] = resilience_meta
                 result["fallback_used"] = True
                 result["fallback_provider"] = "gemini"
                 result["fallback_model"] = fallback_model
                 return result
             except Exception as fb_err:
                 logger.error(f"Fallback Gemini also failed: {fb_err}")
-                result["error"] = f"Primary ({e}) and Fallback ({fb_err}) both failed."
+                if isinstance(fb_err, RuntimeResilienceError):
+                    raise fb_err
+                result["error"] = f"Primary ({primary_error}) and Fallback ({fb_err}) both failed."
                 raise Exception(result["error"])
+    except asyncio.CancelledError:
+        raise
+    raise primary_error

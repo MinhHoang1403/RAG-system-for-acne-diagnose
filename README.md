@@ -74,6 +74,8 @@ Checkpoint ổn định:
   gặp trong miền trị mụn và an toàn thuốc, gồm hardening cho phủ định tiếng
   Việt như `không phải là kháng sinh`.
 - Redis semantic cache được cô lập bằng answer version và pipeline fingerprint.
+- Runtime resilience cho Phase 2: total agent timeout, provider timeout,
+  retry ngắn cho lỗi transient và circuit breaker in-memory cho provider lỗi lặp.
 - FastAPI backend và React/Vite frontend.
 - Bộ offline evaluation cho Phase 1 và Phase 2.
 
@@ -306,8 +308,21 @@ bạn muốn chạy. Không commit `.env`.
 | Embedding | `EMBEDDING_DIMENSIONS` | `3072` |
 | LLM | `GOOGLE_API_KEY` | Chỉ điền trong `.env`; không đưa vào tài liệu |
 | LLM | `GOOGLE_MODEL` | `.env.example`: `gemini-3.5-flash`; runtime có default fallback nếu unset |
+| LLM resilience | `GEMINI_TIMEOUT_SECONDS` | `45` |
+| LLM resilience | `OLLAMA_TIMEOUT_SECONDS` | `90` |
+| LLM resilience | `LLM_MAX_RETRIES` | `1` |
+| LLM resilience | `LLM_RETRY_BASE_DELAY_SECONDS` | `1` |
+| LLM resilience | `LLM_RETRY_MAX_DELAY_SECONDS` | `4` |
 | LLM | `OLLAMA_BASE_URL` | `http://localhost:11434` |
 | LLM | `OLLAMA_MODEL` | `.env.example`: `qwen2.5` |
+| Runtime resilience | `AGENT_TOTAL_TIMEOUT_SECONDS` | `120` |
+| Runtime resilience | `RETRIEVAL_TIMEOUT_SECONDS` | `20` |
+| Runtime resilience | `NEO4J_TIMEOUT_SECONDS` | `10` |
+| Runtime resilience | `RERANK_TIMEOUT_SECONDS` | `20` |
+| Runtime resilience | `CIRCUIT_BREAKER_ENABLED` | `true` |
+| Runtime resilience | `CIRCUIT_BREAKER_FAILURE_THRESHOLD` | `3` |
+| Runtime resilience | `CIRCUIT_BREAKER_RECOVERY_SECONDS` | `60` |
+| Runtime resilience | `CIRCUIT_BREAKER_HALF_OPEN_MAX_CALLS` | `1` |
 | Rerank | `RERANK_ENABLED` | `true` |
 | Rerank | `RERANK_PROVIDER` | `local_rules` |
 | Rerank | `RERANK_TOP_N` | `8` |
@@ -323,6 +338,7 @@ bạn muốn chạy. Không commit `.env`.
 | Versioning | `ENTITY_SCHEMA_VERSION` | `entity_schema_v1` |
 | Versioning | `CHUNK_SCHEMA_VERSION` | `chunk_schema_v2` |
 | Versioning | `INGESTION_PIPELINE_VERSION` | `ingestion_pipeline_v2` |
+| Versioning | `RUNTIME_RESILIENCE_VERSION` | `runtime_resilience_v1` |
 | Observability | `OBSERVABILITY_ENABLED` | `false` |
 | Observability | `OBSERVABILITY_TRACE_DIR` | `logs/phase2_traces` |
 | Observability | `OBSERVABILITY_MAX_TEXT_CHARS` | `500` |

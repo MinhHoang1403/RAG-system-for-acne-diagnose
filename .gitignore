@@ -6,6 +6,7 @@
 # Environment & Secrets  (12-Factor: config in environment)
 # ---------------------------------------------------------------------------
 .env
+.env.hardening02_backup
 .env.phase2_audit_backup
 .env.pre_ui_audit_backup
 .env.local

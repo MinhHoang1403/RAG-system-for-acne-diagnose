@@ -19,6 +19,8 @@ Pipeline
 from __future__ import annotations
 
 import logging
+import asyncio
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -367,13 +369,33 @@ class HybridRetriever:
         t_rerank_start = time.time()
         rerank_top_n = rerank_top_n_from_env(default=max(top_k * 2, 8))
         if rerank_enabled_from_env():
-            reranked_candidates, rerank_trace = rerank_candidates(
-                normalized_query=normalized_query,
-                candidates=merged_candidates,
-                expansion=expansion,
-                top_n=rerank_top_n,
-                provider=rerank_provider_from_env(),
-            )
+            try:
+                reranked_candidates, rerank_trace = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        rerank_candidates,
+                        normalized_query=normalized_query,
+                        candidates=merged_candidates,
+                        expansion=expansion,
+                        top_n=rerank_top_n,
+                        provider=rerank_provider_from_env(),
+                    ),
+                    timeout=float(os.getenv("RERANK_TIMEOUT_SECONDS", "20")),
+                )
+            except asyncio.TimeoutError:
+                warning = "Reranker timed out; using merged candidate order."
+                warnings.append(warning)
+                logger.warning(warning)
+                reranked_candidates = merged_candidates
+                rerank_trace = RerankTrace(
+                    provider=rerank_provider_from_env(),
+                    enabled=False,
+                    input_count=len(merged_candidates),
+                    output_count=len(merged_candidates),
+                    top_n=rerank_top_n,
+                    ranked_candidates=[],
+                    warnings=[warning],
+                    timings_ms={},
+                )
         else:
             reranked_candidates = merged_candidates
             rerank_trace = RerankTrace(
@@ -414,17 +436,27 @@ class HybridRetriever:
         # ── Step 6: Neo4j knowledge graph context ────────────────────
         t_neo4j_start = time.time()
 
-        if entity_names:
-            graph_facts = await self._graph_store.get_entity_context(
-                list(entity_names),
-            )
-        else:
-            # Fallback: keyword search from query tokens
-            logger.info(
-                "No graph_nodes in payloads, falling back to keyword search."
-            )
-            keywords = query.lower().split()
-            graph_facts = await self._graph_store.search_by_keywords(keywords)
+        neo4j_timeout_seconds = float(os.getenv("NEO4J_TIMEOUT_SECONDS", "10"))
+        try:
+            async with asyncio.timeout(neo4j_timeout_seconds):
+                if entity_names:
+                    graph_facts = await self._graph_store.get_entity_context(
+                        list(entity_names),
+                    )
+                else:
+                    # Fallback: keyword search from query tokens
+                    logger.info(
+                        "No graph_nodes in payloads, falling back to keyword search."
+                    )
+                    keywords = query.lower().split()
+                    graph_facts = await self._graph_store.search_by_keywords(keywords)
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            warning = f"Neo4j context skipped after {neo4j_timeout_seconds:.1f}s timeout."
+            warnings.append(warning)
+            logger.warning(warning)
+            graph_facts = []
 
         t_neo4j = time.time() - t_neo4j_start
         logger.info(
