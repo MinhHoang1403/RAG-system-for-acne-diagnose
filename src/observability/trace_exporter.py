@@ -118,6 +118,9 @@ def build_observability_event(
             "answer_guard_modified": result.get("answer_guard_modified", state.get("answer_guard_modified")),
             "answer_guard_mode": result.get("answer_guard_mode", state.get("answer_guard_mode")),
             "pipeline_manifest": pipeline_manifest_summary(pipeline_manifest),
+            "runtime_resilience": sanitize_for_observability(
+                result.get("runtime_resilience", state.get("runtime_resilience"))
+            ),
         },
     )
 

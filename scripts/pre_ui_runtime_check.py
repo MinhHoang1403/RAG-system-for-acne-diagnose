@@ -69,6 +69,8 @@ async def run_pre_ui_runtime_check() -> dict[str, Any]:
             and env_summary.get("ENTITY_QDRANT_COLLECTION_NAME") == "acne_entities_v1"
             and env_summary.get("NEO4J_URI") == "bolt://127.0.0.1:7687"
             and env_summary.get("RERANK_PROVIDER") == "local_rules"
+            and env_summary.get("AGENT_TOTAL_TIMEOUT_SECONDS") == "120"
+            and env_summary.get("CIRCUIT_BREAKER_ENABLED") == "true"
             and env_summary.get("OBSERVABILITY_ENABLED") == "false"
             and env_summary.get("PHASE2_DEBUG_METADATA") == "false",
             env_summary,
@@ -153,6 +155,20 @@ def _env_summary() -> dict[str, str]:
         "ANSWER_VERIFIER_ENABLED",
         "ANSWER_GUARD_MODE",
         "ANSWER_VERIFIER_STRICT",
+        "RUNTIME_RESILIENCE_VERSION",
+        "AGENT_TOTAL_TIMEOUT_SECONDS",
+        "RETRIEVAL_TIMEOUT_SECONDS",
+        "NEO4J_TIMEOUT_SECONDS",
+        "RERANK_TIMEOUT_SECONDS",
+        "GEMINI_TIMEOUT_SECONDS",
+        "OLLAMA_TIMEOUT_SECONDS",
+        "LLM_MAX_RETRIES",
+        "LLM_RETRY_BASE_DELAY_SECONDS",
+        "LLM_RETRY_MAX_DELAY_SECONDS",
+        "CIRCUIT_BREAKER_ENABLED",
+        "CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+        "CIRCUIT_BREAKER_RECOVERY_SECONDS",
+        "CIRCUIT_BREAKER_HALF_OPEN_MAX_CALLS",
         "CACHE_ANSWER_VERSION",
         "OBSERVABILITY_ENABLED",
         "OBSERVABILITY_TRACE_DIR",

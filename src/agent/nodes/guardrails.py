@@ -10,8 +10,24 @@ import logging
 from src.agent.llm.provider import generate_llm_response
 
 from src.agent.state import ClinicalState
+from src.resilience.budget import DeadlineBudget
+from src.resilience.contracts import RuntimeResilienceSettings, runtime_resilience_settings_from_env
 
 logger = logging.getLogger(__name__)
+
+
+def _runtime_settings(state: ClinicalState) -> RuntimeResilienceSettings:
+    configured = state.get("runtime_resilience_settings")
+    if isinstance(configured, dict):
+        return RuntimeResilienceSettings(**configured)
+    return runtime_resilience_settings_from_env()
+
+
+def _runtime_budget(state: ClinicalState, settings: RuntimeResilienceSettings) -> DeadlineBudget:
+    budget = state.get("runtime_budget")
+    if isinstance(budget, DeadlineBudget):
+        return budget
+    return DeadlineBudget.from_timeout(settings.agent_total_timeout_seconds)
 
 async def domain_guard_node(state: ClinicalState) -> dict:
     """
@@ -233,6 +249,7 @@ Câu hỏi cần phân loại:
         llm_provider = state.get("llm_provider", "gemini")
         llm_model = state.get("llm_model")
         allow_model_fallback = state.get("allow_model_fallback", True)
+        settings = _runtime_settings(state)
         
         response_data = await generate_llm_response(
             prompt=prompt,
@@ -240,7 +257,9 @@ Câu hỏi cần phân loại:
             model=llm_model,
             temperature=0.0,
             allow_fallback=allow_model_fallback,
-            use_sync=False
+            use_sync=False,
+            budget=_runtime_budget(state, settings),
+            resilience_settings=settings,
         )
         
         result_str = response_data["text"].strip()

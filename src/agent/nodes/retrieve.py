@@ -6,12 +6,30 @@ LangGraph nodes for processing input and retrieving context.
 
 import logging
 
+import asyncio
 import os
 from src.agent.llm.provider import generate_llm_response
 from src.agent.state import ClinicalState
 from src.database.retriever import HybridRetriever
+from src.resilience.budget import DeadlineBudget
+from src.resilience.contracts import RuntimeResilienceSettings, runtime_resilience_settings_from_env
+from src.resilience.exceptions import StageTimeoutError
 
 logger = logging.getLogger(__name__)
+
+
+def _runtime_settings(state: ClinicalState) -> RuntimeResilienceSettings:
+    configured = state.get("runtime_resilience_settings")
+    if isinstance(configured, dict):
+        return RuntimeResilienceSettings(**configured)
+    return runtime_resilience_settings_from_env()
+
+
+def _runtime_budget(state: ClinicalState, settings: RuntimeResilienceSettings) -> DeadlineBudget:
+    budget = state.get("runtime_budget")
+    if isinstance(budget, DeadlineBudget):
+        return budget
+    return DeadlineBudget.from_timeout(settings.agent_total_timeout_seconds)
 
 
 async def normalize_question_node(state: ClinicalState) -> dict:
@@ -101,7 +119,9 @@ Câu hỏi độc lập:
             model=llm_model,
             temperature=0.0,
             allow_fallback=allow_model_fallback,
-            use_sync=False
+            use_sync=False,
+            budget=_runtime_budget(state, _runtime_settings(state)),
+            resilience_settings=_runtime_settings(state),
         )
         
         rewritten = response_data["text"].strip()
@@ -163,7 +183,13 @@ async def retrieve_context_node(state: ClinicalState) -> dict:
     
     retriever = HybridRetriever()
     try:
-        result = await retriever.retrieve(query, top_k=5)
+        settings = _runtime_settings(state)
+        budget = _runtime_budget(state, settings)
+        timeout_seconds = budget.cap_timeout(settings.retrieval_timeout_seconds)
+        if timeout_seconds <= 0:
+            raise StageTimeoutError("No remaining deadline budget for retrieval.")
+        async with asyncio.timeout(timeout_seconds):
+            result = await retriever.retrieve(query, top_k=5)
         return {
             "vector_contexts": result.vector_contexts,
             "graph_facts": result.graph_facts,
@@ -171,6 +197,12 @@ async def retrieve_context_node(state: ClinicalState) -> dict:
             "retrieval_trace": result.metadata.get("retrieval_trace"),
             "packed_context": result.metadata.get("packed_context"),
         }
+    except asyncio.CancelledError:
+        raise
+    except TimeoutError as exc:
+        raise StageTimeoutError(f"Retrieval exceeded timeout of {timeout_seconds:.1f}s.") from exc
+    except StageTimeoutError:
+        raise
     except Exception as e:
         logger.error(f"Retrieval error: {e}")
         return {

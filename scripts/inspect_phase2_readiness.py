@@ -197,6 +197,10 @@ def inspect_runtime_code() -> dict[str, Any]:
     context_packer_source = (PROJECT_ROOT / "src" / "retrieval" / "context_packer.py").read_text(encoding="utf-8")
     reranker_source = (PROJECT_ROOT / "src" / "retrieval" / "reranker.py").read_text(encoding="utf-8")
     agent_graph_source = (PROJECT_ROOT / "src" / "agent" / "graph.py").read_text(encoding="utf-8")
+    llm_provider_source = (PROJECT_ROOT / "src" / "agent" / "llm" / "provider.py").read_text(encoding="utf-8")
+    resilience_provider_path = PROJECT_ROOT / "src" / "resilience" / "provider.py"
+    resilience_circuit_path = PROJECT_ROOT / "src" / "resilience" / "circuit_breaker.py"
+    resilience_retry_path = PROJECT_ROOT / "src" / "resilience" / "retry.py"
     answer_verifier_path = PROJECT_ROOT / "src" / "quality" / "answer_verifier.py"
     answer_quality_eval_path = PROJECT_ROOT / "scripts" / "eval_phase2_answer_quality.py"
     runtime_smoke_path = PROJECT_ROOT / "scripts" / "smoke_phase2_runtime.py"
@@ -238,6 +242,14 @@ def inspect_runtime_code() -> dict[str, Any]:
             and "def apply_answer_guard" in answer_verifier_source,
             "vietnamese_answer_verifier_hardened": "answer_verifier_v2" in cache_versioning_source
             and "extract_domain_propositions" in answer_verifier_source,
+            "runtime_timeout_enabled": "AgentTimeoutError" in agent_graph_source
+            and "asyncio.timeout" in agent_graph_source,
+            "runtime_retry_policy_enabled": resilience_retry_path.exists()
+            and "RetryPolicy" in resilience_retry_path.read_text(encoding="utf-8")
+            and "call_provider_with_resilience" in llm_provider_source,
+            "runtime_circuit_breaker_enabled": resilience_circuit_path.exists()
+            and "CircuitBreaker" in llm_provider_source,
+            "runtime_resilience_versioned": "runtime_resilience_version" in cache_versioning_source,
             "answer_guard_integrated": "answer_quality" in agent_graph_source
             and "cache_store" in agent_graph_source,
             "answer_quality_eval_available": answer_quality_eval_path.exists(),

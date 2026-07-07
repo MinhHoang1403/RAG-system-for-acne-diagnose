@@ -9,6 +9,9 @@ import re
 from typing import Any
 
 from src.agent.state import ClinicalState
+from src.resilience.budget import DeadlineBudget
+from src.resilience.contracts import RuntimeResilienceSettings, runtime_resilience_settings_from_env
+from src.resilience.exceptions import RuntimeResilienceError
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +70,20 @@ async def safety_check_node(state: ClinicalState) -> dict:
 
 import os
 from src.agent.llm.provider import generate_llm_response
+
+
+def _runtime_settings(state: ClinicalState) -> RuntimeResilienceSettings:
+    configured = state.get("runtime_resilience_settings")
+    if isinstance(configured, dict):
+        return RuntimeResilienceSettings(**configured)
+    return runtime_resilience_settings_from_env()
+
+
+def _runtime_budget(state: ClinicalState, settings: RuntimeResilienceSettings) -> DeadlineBudget:
+    budget = state.get("runtime_budget")
+    if isinstance(budget, DeadlineBudget):
+        return budget
+    return DeadlineBudget.from_timeout(settings.agent_total_timeout_seconds)
 
 
 def _is_reference_context(ctx: dict[str, Any]) -> bool:
@@ -352,6 +369,7 @@ async def generate_answer_node(state: ClinicalState) -> dict:
         llm_provider = state.get("llm_provider", "gemini")
         llm_model = state.get("llm_model")
         allow_model_fallback = state.get("allow_model_fallback", True)
+        settings = _runtime_settings(state)
         
         logger.info(f"Generating answer with LLM: provider={llm_provider}, model={llm_model}")
         
@@ -360,7 +378,9 @@ async def generate_answer_node(state: ClinicalState) -> dict:
             provider=llm_provider,
             model=llm_model,
             temperature=0.2,
-            allow_fallback=allow_model_fallback
+            allow_fallback=allow_model_fallback,
+            budget=_runtime_budget(state, settings),
+            resilience_settings=settings,
         )
         
         draft = response_data["text"]
@@ -377,9 +397,15 @@ async def generate_answer_node(state: ClinicalState) -> dict:
             "actual_model": response_data["model"],
             "llm_fallback_used": response_data["fallback_used"],
             "fallback_provider": response_data["fallback_provider"],
-            "fallback_model": response_data["fallback_model"]
+            "fallback_model": response_data["fallback_model"],
+            "runtime_resilience": {
+                **(state.get("runtime_resilience") or {}),
+                "llm": response_data.get("resilience"),
+            },
         }
         
+    except RuntimeResilienceError:
+        raise
     except Exception as e:
         logger.error(f"LLM generation failed: {e}")
         # Set llm_fallback metadata
