@@ -21,6 +21,7 @@ from src.agent.nodes.reason import (
     generate_answer_node
 )
 from src.agent.nodes.respond import finalize_response_node
+from src.agent.nodes.quality import answer_quality_node
 from src.agent.nodes.guardrails import domain_guard_node
 from src.agent.nodes.cache import cache_lookup_node, cache_store_node
 
@@ -55,6 +56,7 @@ def build_clinical_graph():
     builder.add_node("generate", generate_answer_node)
     builder.add_node("cache_store", cache_store_node)
     builder.add_node("finalize", finalize_response_node)
+    builder.add_node("answer_quality", answer_quality_node)
     
     # Define the edges (the flow)
     builder.add_edge(START, "normalize")
@@ -71,7 +73,8 @@ def build_clinical_graph():
     builder.add_edge("retrieve", "safety")
     builder.add_edge("safety", "generate")
     builder.add_edge("generate", "finalize")
-    builder.add_edge("finalize", "cache_store")
+    builder.add_edge("finalize", "answer_quality")
+    builder.add_edge("answer_quality", "cache_store")
     builder.add_edge("cache_store", END)
     
     # Compile the graph
@@ -123,9 +126,14 @@ async def run_clinical_agent(
         "vector_contexts": [],
         "graph_facts": [],
         "sources": [],
+        "retrieval_trace": None,
+        "packed_context": None,
         "safety_flags": [],
         "draft_answer": "",
         "final_answer": "",
+        "answer_quality_report": None,
+        "answer_guard_modified": None,
+        "answer_guard_mode": None,
         "errors": [],
         "cache_enabled": None,
         "cache_checked": None,
@@ -158,6 +166,11 @@ async def run_clinical_agent(
         "safety_flags": final_state.get("safety_flags", []),
         "sources": final_state.get("sources", []),
         "graph_facts": final_state.get("graph_facts", []),
+        "retrieval_trace": final_state.get("retrieval_trace"),
+        "packed_context": final_state.get("packed_context"),
+        "answer_quality_report": final_state.get("answer_quality_report"),
+        "answer_guard_modified": final_state.get("answer_guard_modified"),
+        "answer_guard_mode": final_state.get("answer_guard_mode"),
         "errors": final_state.get("errors", []),
         "is_in_domain": final_state.get("is_in_domain"),
         "guardrail": final_state.get("guardrail"),

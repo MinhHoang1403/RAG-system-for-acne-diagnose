@@ -34,6 +34,7 @@ from src.knowledge.entity_index import (  # noqa: E402
     get_entity_collection_name,
 )
 from src.knowledge.versioning import get_embedding_metadata  # noqa: E402
+from src.retrieval.reranker import rerank_provider_from_env  # noqa: E402
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -190,26 +191,68 @@ async def inspect_neo4j() -> dict[str, Any]:
 def inspect_runtime_code() -> dict[str, Any]:
     retriever_source = (PROJECT_ROOT / "src" / "database" / "retriever.py").read_text(encoding="utf-8")
     graph_store_source = (PROJECT_ROOT / "src" / "database" / "graph_store.py").read_text(encoding="utf-8")
+    entity_retriever_source = (PROJECT_ROOT / "src" / "retrieval" / "entity_retriever.py").read_text(encoding="utf-8")
+    query_normalization_source = (PROJECT_ROOT / "src" / "retrieval" / "query_normalization.py").read_text(encoding="utf-8")
+    context_packer_source = (PROJECT_ROOT / "src" / "retrieval" / "context_packer.py").read_text(encoding="utf-8")
+    reranker_source = (PROJECT_ROOT / "src" / "retrieval" / "reranker.py").read_text(encoding="utf-8")
+    agent_graph_source = (PROJECT_ROOT / "src" / "agent" / "graph.py").read_text(encoding="utf-8")
+    answer_verifier_path = PROJECT_ROOT / "src" / "quality" / "answer_verifier.py"
+    answer_quality_eval_path = PROJECT_ROOT / "scripts" / "eval_phase2_answer_quality.py"
+    runtime_smoke_path = PROJECT_ROOT / "scripts" / "smoke_phase2_runtime.py"
+    answer_verifier_source = answer_verifier_path.read_text(encoding="utf-8") if answer_verifier_path.exists() else ""
+    runtime_smoke_source = runtime_smoke_path.read_text(encoding="utf-8") if runtime_smoke_path.exists() else ""
 
     return {
         "current_capabilities": {
+            "entity_aware_retrieval": "EntityRetriever" in retriever_source
+            and "normalize_query" in retriever_source
+            and "expand_normalized_query" in retriever_source,
             "qdrant_dense_search": "dense_results = await self._vector_store.search(" in retriever_source,
             "qdrant_sparse_bm25_search": "search_sparse" in retriever_source,
             "rrf_fusion": "rrf_fusion" in retriever_source,
             "legacy_query_metadata_boost": "extract_dermatology_metadata" in retriever_source,
             "neo4j_graph_context": "Neo4jGraphStore" in retriever_source,
             "neo4j_canonical_name_compatible": "canonical_name" in graph_store_source,
-            "entity_collection_runtime_retrieval": "acne_entities_v1" in retriever_source
-            or "get_entity_collection_name" in retriever_source,
-            "drug_entity_normalizer_runtime": "DrugEntityNormalizer" in retriever_source,
+            "entity_collection_runtime_retrieval": "EntityRetriever" in retriever_source
+            and "get_entity_collection_name" in entity_retriever_source,
+            "drug_entity_normalizer_runtime": "normalize_query" in retriever_source
+            and "DrugEntityNormalizer" in query_normalization_source,
+            "taxonomy_query_expansion": "expand_normalized_query" in retriever_source,
+            "metadata_aware_chunk_boost": "boost_chunk_results" in retriever_source,
+            "candidate_merge_trace": "RetrievalTrace" in retriever_source,
+            "entity_aware_context_packing": "pack_context" in retriever_source
+            and "PackedContext" in context_packer_source,
+            "local_reranker_available": "def rerank_candidates" in reranker_source
+            and "local_rules" in reranker_source,
+            "reranking_integrated": "rerank_candidates" in retriever_source
+            and "rerank_trace" in retriever_source,
+            "answer_quality_verifier_available": "def verify_answer_quality" in answer_verifier_source
+            and "def apply_answer_guard" in answer_verifier_source,
+            "answer_guard_integrated": "answer_quality" in agent_graph_source
+            and "cache_store" in agent_graph_source,
+            "answer_quality_eval_available": answer_quality_eval_path.exists(),
+            "runtime_smoke_available": runtime_smoke_path.exists(),
+            "offline_smoke_available": "def run_offline_smoke" in runtime_smoke_source
+            and "--live-chat" in runtime_smoke_source,
         },
+        "rerank_provider_default": _display_rerank_provider(),
         "deferred_phase2_features": [
-            "Route retrieval through acne_entities_v1 entity cards before chunk expansion.",
-            "Use DrugEntityNormalizer/query intent metadata at runtime, not only legacy metadata boost.",
-            "Add entity-aware context selection over drug_product, active_ingredient, drug_class, route, and safety_context.",
-            "Use deterministic Neo4j graph as structured expansion, not only graph_nodes/keyword fallback.",
+            "Add external rerank provider or installed local model reranker.",
+            "Add optional LLM-backed medical answer reviewer for complex answers.",
+            "Use deterministic Neo4j graph for deeper structured expansion beyond 1-hop supplemental facts.",
+            "Web fallback is intentionally not implemented.",
+            "Full clinical safety engine is intentionally out of scope for this deterministic guard.",
         ],
     }
+
+
+def _display_rerank_provider() -> str:
+    provider = rerank_provider_from_env().strip().lower()
+    if provider in {"", "local", "local_rules"}:
+        return "local_rules"
+    if provider == "local_model":
+        return "local_model (fallbacks to local_rules when unavailable)"
+    return f"{provider} (unknown; runtime falls back to local_rules)"
 
 
 async def main() -> int:
@@ -232,7 +275,7 @@ async def main() -> int:
         "runtime_config": runtime_config,
         "phase1_state_checks": checks,
         **runtime_code,
-        "recommended_next_step": "Phase 2A: entity-aware retrieval upgrade using acne_entities_v1 and deterministic Neo4j expansion.",
+        "recommended_next_step": "Run Phase 2D offline answer quality and runtime smoke evals before any live chat smoke.",
     }
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     return 0 if report["passed"] else 1

@@ -215,7 +215,51 @@ Kiểm tra read-only trước khi nâng cấp retrieval:
 .\venv\Scripts\python.exe scripts\inspect_phase2_readiness.py
 ```
 
-Runtime Phase 2 hiện đã đọc Qdrant hybrid `dense`/`bm25` và Neo4j graph facts. Phase 2A tiếp theo nên nối entity-card retrieval từ `acne_entities_v1`, query normalization bằng taxonomy, metadata-aware context selection và deterministic Neo4j expansion sâu hơn. Legacy LLM graph extraction không bắt buộc cho baseline Phase 1 hiện tại.
+Runtime Phase 2 hiện đã đọc Qdrant hybrid `dense`/`bm25`, entity cards từ `acne_entities_v1`, Neo4j graph facts, local reranking và context packing theo intent. Legacy LLM graph extraction không bắt buộc cho baseline Phase 1 hiện tại.
+
+Phase 2A bổ sung nền entity-aware retrieval:
+
+- Chuẩn hoá query bằng `DrugEntityNormalizer`.
+- Mở rộng query bằng taxonomy local, không gọi LLM.
+- Exact/payload entity retrieval từ `acne_entities_v1`.
+- Metadata boost cho chunks trong `acne_knowledge` theo `drug_product`, `active_ingredient`, `drug_class`, `condition`, `query_intent_hint`, `safety_context`, `concern` và `content_type`.
+- Merge candidates từ entity cards và chunks, kèm retrieval trace trong metadata/debug.
+
+Phase 2B bổ sung entity-aware context packing:
+
+- Pack `ENTITY CARD` và `EVIDENCE CHUNK` theo intent.
+- Với câu hỏi thuốc, giữ entity liên quan và thêm chunk evidence nếu có.
+- Với câu hỏi loại mụn, ưu tiên chunk evidence theo `concern`, `content_type`, `condition`, `domain_topic`.
+- Packed context được bridge về format context cũ để prompt hiện tại vẫn tương thích.
+
+Phase 2C bổ sung local/offline-first reranking:
+
+- Rerank merged candidates sau candidate merge và trước context packing.
+- Provider mặc định `local_rules`, deterministic và không gọi external API.
+- `RERANK_ENABLED=false` tắt reranker; `RERANK_TOP_N` và `RERANK_PROVIDER` điều chỉnh runtime.
+- `local_model` chỉ là extension point có fallback về `local_rules`, không tự tải model.
+
+Phase 2D bổ sung answer quality verifier/guard deterministic:
+
+- Kiểm tra offline các mâu thuẫn phổ biến như benzoyl peroxide/adapalene bị gọi nhầm là kháng sinh, clindamycin bị gọi nhầm là retinoid, câu trả lời loại mụn bị drift thành danh sách thuốc, và cảnh báo an toàn retinoid/isotretinoin.
+- Runtime graph chạy node `answer_quality` sau finalize và trước cache store. Mặc định `ANSWER_GUARD_MODE=metadata_only`, chỉ ghi metadata/report và không tự sửa answer.
+- `scripts/eval_phase2_answer_quality.py` chạy golden cases offline, không gọi LLM/embedding/API ngoài.
+- `scripts/smoke_phase2_runtime.py --mode offline` chạy smoke retrieval/rerank/context/quality bằng dữ liệu taxonomy local. `--live-chat` mới gọi runtime chat và có thể gọi LLM theo cấu hình.
+
+Giới hạn hiện tại: chưa có external rerank provider/model thật, chưa có LLM-backed medical reviewer, chưa có web fallback, chưa có Neo4j expansion sâu hơn và chưa thay thế được clinical safety engine.
+
+Validation:
+
+```powershell
+.\venv\Scripts\python.exe scripts\eval_phase2_retrieval.py
+.\venv\Scripts\python.exe scripts\eval_phase2_context_packing.py
+.\venv\Scripts\python.exe scripts\eval_phase2_reranking.py
+.\venv\Scripts\python.exe scripts\eval_phase2_answer_quality.py
+.\venv\Scripts\python.exe scripts\smoke_phase2_runtime.py --mode offline
+.\venv\Scripts\python.exe scripts\inspect_phase2_readiness.py
+.\venv\Scripts\python.exe scripts\validate_phase1_complete.py
+.\venv\Scripts\python.exe -m pytest tests -q --no-cov
+```
 
 ## Hướng Dẫn Cài Đặt
 
@@ -531,6 +575,18 @@ Diagnostics hữu ích:
 ```
 
 Smoke questions thủ công cho `/chat` sau khi Phase 2 chạy:
+
+Chạy smoke offline trước:
+
+```powershell
+.\venv\Scripts\python.exe scripts\smoke_phase2_runtime.py --mode offline
+```
+
+Chỉ dùng live chat smoke khi đã chủ động chấp nhận gọi provider chat theo `.env`:
+
+```powershell
+.\venv\Scripts\python.exe scripts\smoke_phase2_runtime.py --live-chat
+```
 
 ```text
 1. Benzoyl peroxide dùng để làm gì trong điều trị mụn trứng cá?
