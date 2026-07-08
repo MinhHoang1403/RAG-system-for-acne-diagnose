@@ -208,6 +208,10 @@ def inspect_runtime_code() -> dict[str, Any]:
     observability_exporter_path = PROJECT_ROOT / "src" / "observability" / "trace_exporter.py"
     neo4j_queries_path = PROJECT_ROOT / "src" / "database" / "neo4j_queries.py"
     neo4j_validator_path = PROJECT_ROOT / "scripts" / "validate_neo4j_schema.py"
+    taxonomy_models_path = PROJECT_ROOT / "src" / "knowledge" / "taxonomy_models.py"
+    taxonomy_validator_path = PROJECT_ROOT / "scripts" / "validate_taxonomy.py"
+    taxonomy_qdrant_planner_path = PROJECT_ROOT / "scripts" / "plan_entity_index_update.py"
+    taxonomy_graph_planner_path = PROJECT_ROOT / "scripts" / "plan_taxonomy_graph_update.py"
     debug_report_path = PROJECT_ROOT / "scripts" / "generate_phase2_debug_report.py"
     all_eval_path = PROJECT_ROOT / "scripts" / "eval_phase2_all.py"
     cache_inspect_path = PROJECT_ROOT / "scripts" / "inspect_cache_versions.py"
@@ -216,6 +220,7 @@ def inspect_runtime_code() -> dict[str, Any]:
     cache_versioning_source = cache_versioning_path.read_text(encoding="utf-8") if cache_versioning_path.exists() else ""
     observability_exporter_source = observability_exporter_path.read_text(encoding="utf-8") if observability_exporter_path.exists() else ""
     neo4j_queries_source = neo4j_queries_path.read_text(encoding="utf-8") if neo4j_queries_path.exists() else ""
+    taxonomy_models_source = taxonomy_models_path.read_text(encoding="utf-8") if taxonomy_models_path.exists() else ""
 
     return {
         "current_capabilities": {
@@ -261,6 +266,13 @@ def inspect_runtime_code() -> dict[str, Any]:
             and ".description" not in neo4j_queries_source
             and ".evidence" not in neo4j_queries_source,
             "neo4j_schema_versioned": "neo4j_schema_version" in cache_versioning_source,
+            "taxonomy_schema_v2_present": "TaxonomyCatalog" in taxonomy_models_source
+            and "taxonomy_schema_v2" in taxonomy_models_source,
+            "taxonomy_validator_present": taxonomy_validator_path.exists(),
+            "taxonomy_alias_collision_check_present": "alias_collision" in taxonomy_models_source,
+            "taxonomy_incremental_planner_present": taxonomy_qdrant_planner_path.exists()
+            and taxonomy_graph_planner_path.exists(),
+            "taxonomy_versioned": "taxonomy_version" in cache_versioning_source,
             "answer_guard_integrated": "answer_quality" in agent_graph_source
             and "cache_store" in agent_graph_source,
             "answer_quality_eval_available": answer_quality_eval_path.exists(),

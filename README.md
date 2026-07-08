@@ -568,6 +568,23 @@ Entity-card Qdrant index:
 `build_entity_index.py` hỗ trợ `--recreate true`, nhưng không dùng như command
 thường ngày vì option này xóa và tạo lại target entity collection.
 
+Taxonomy v2 hardening:
+
+```powershell
+.\venv\Scripts\python.exe scripts\validate_taxonomy.py
+.\venv\Scripts\python.exe scripts\inspect_taxonomy_candidates.py
+.\venv\Scripts\python.exe scripts\plan_entity_index_update.py
+.\venv\Scripts\python.exe scripts\plan_taxonomy_graph_update.py
+.\venv\Scripts\python.exe scripts\eval_taxonomy_expansion.py --mode offline
+.\venv\Scripts\python.exe scripts\eval_taxonomy_expansion.py --mode integration-readonly
+```
+
+`data/taxonomy/drug_taxonomy_v2.yaml` is a reviewed/dry-run source with
+provenance and `review_status`. Production entity-card and graph updates must
+go through the dry-run planners first. Draft candidates from local text are not
+indexed into `acne_entities_v1` by default, and these commands do not mutate
+Qdrant or Neo4j.
+
 Deterministic Neo4j entity graph:
 
 ```powershell

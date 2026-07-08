@@ -70,6 +70,13 @@ async def run_pre_ui_runtime_check() -> dict[str, Any]:
     )
     checks.append(
         check(
+            "taxonomy_version",
+            bool(manifest.get("taxonomy_version")),
+            {"taxonomy_version": manifest.get("taxonomy_version")},
+        )
+    )
+    checks.append(
+        check(
             "env_runtime_core",
             env_summary.get("QDRANT_COLLECTION_NAME") == "acne_knowledge"
             and env_summary.get("CHUNK_QDRANT_COLLECTION_NAME") == "acne_knowledge"
@@ -162,6 +169,7 @@ def _env_summary() -> dict[str, str]:
         "ANSWER_VERIFIER_ENABLED",
         "ANSWER_GUARD_MODE",
         "ANSWER_VERIFIER_STRICT",
+        "TAXONOMY_VERSION",
         "RUNTIME_RESILIENCE_VERSION",
         "AGENT_TOTAL_TIMEOUT_SECONDS",
         "RETRIEVAL_TIMEOUT_SECONDS",

@@ -97,16 +97,14 @@ build/
 # ---------------------------------------------------------------------------
 # Data & Knowledge (keep structure, exclude large/sensitive files)
 # ---------------------------------------------------------------------------
-data/
+data/*
 data/raw/
 data/processed/
 data/embeddings/
 data/cache/
-!data/.gitkeep
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-!data/embeddings/.gitkeep
-!data/cache/.gitkeep
+!data/taxonomy/
+data/taxonomy/*
+!data/taxonomy/drug_taxonomy_v2.yaml
 
 # Keep sample_data structure but ignore large files
 sample_data/
