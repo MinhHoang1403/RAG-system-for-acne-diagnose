@@ -15,6 +15,7 @@ from src.database.vector_store import (
 )
 from src.knowledge.entity_cards import entity_card_to_text
 from src.knowledge.schemas import EntityCard
+from src.knowledge.taxonomy_models import normalize_taxonomy_alias
 from src.knowledge.versioning import (
     get_embedding_metadata,
     get_knowledge_versions,
@@ -41,15 +42,48 @@ def get_chunk_collection_name() -> str:
     return configured
 
 
+def entity_identity_key(card_or_payload: EntityCard | dict[str, Any]) -> str:
+    """Return the version-independent canonical identity for an entity card."""
+
+    if isinstance(card_or_payload, EntityCard):
+        entity_type = card_or_payload.entity_type
+        metadata = card_or_payload.metadata
+        canonical_name = card_or_payload.canonical_name
+    else:
+        entity_type = str(card_or_payload.get("entity_type") or "").strip()
+        metadata = card_or_payload.get("metadata") if isinstance(card_or_payload.get("metadata"), dict) else {}
+        canonical_name = str(card_or_payload.get("canonical_name") or "").strip()
+
+    taxonomy_key = ""
+    if isinstance(metadata, dict):
+        taxonomy_key = str(metadata.get("taxonomy_key") or "").strip()
+    identity_source = taxonomy_key or canonical_name
+    normalized = normalize_taxonomy_alias(identity_source).replace(" ", "_")
+    if not entity_type or not normalized:
+        raise ValueError("Entity identity requires entity_type and taxonomy_key/canonical_name.")
+    return f"{entity_type}:{normalized}"
+
+
 def entity_point_id(card: EntityCard, kb_version: str = "acne_kb_v1") -> str:
-    """Return a deterministic Qdrant-compatible UUID for an entity card."""
+    """Return a deterministic Qdrant-compatible UUID for a new entity identity.
 
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, card.stable_id(kb_version=kb_version)))
+    ``kb_version`` is accepted for backward-compatible callers but does not
+    participate in canonical identity.
+    """
+
+    _ = kb_version
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"acne_entity:{entity_identity_key(card)}"))
 
 
-def build_entity_point_payload(card: EntityCard, kb_version: str = "acne_kb_v1") -> dict[str, Any]:
+def build_entity_point_payload(
+    card: EntityCard,
+    kb_version: str = "acne_kb_v1",
+    *,
+    point_id: str | None = None,
+) -> dict[str, Any]:
     """Build the Qdrant payload for an entity card."""
 
+    identity = entity_identity_key(card)
     payload = card.to_payload()
     payload.update(
         {
@@ -57,11 +91,14 @@ def build_entity_point_payload(card: EntityCard, kb_version: str = "acne_kb_v1")
             "kb_version": kb_version,
             **get_embedding_metadata(),
             **get_knowledge_versions(),
-            "entity_id": card.stable_id(kb_version=kb_version),
-            "point_id": entity_point_id(card, kb_version=kb_version),
+            "entity_id": identity,
+            "canonical_identity": identity,
+            "point_id": point_id or entity_point_id(card, kb_version=kb_version),
         }
     )
     payload["kb_version"] = kb_version
+    payload["taxonomy_version"] = card.taxonomy_version
+    payload["entity_schema_version"] = card.entity_schema_version
     return payload
 
 
@@ -139,12 +176,14 @@ def build_entity_point(
     card: EntityCard,
     dense_vector: list[float],
     kb_version: str = "acne_kb_v1",
+    *,
+    point_id: str | None = None,
 ) -> Any:
     """Build a Qdrant ``PointStruct`` with dense and hashed sparse BM25 vectors."""
 
     from qdrant_client.models import PointStruct, SparseVector  # type: ignore[import]
 
-    payload = build_entity_point_payload(card, kb_version=kb_version)
+    payload = build_entity_point_payload(card, kb_version=kb_version, point_id=point_id)
     sparse = compute_sparse_vector(payload["text"])
     vector: dict[str, Any] = {"dense": dense_vector}
     if sparse["indices"]:
@@ -197,12 +236,21 @@ async def upsert_entity_cards(
         client = AsyncQdrantClient(**qdrant_client_kwargs())
 
     try:
+        existing_point_ids = await _load_existing_entity_point_ids(
+            client=client,
+            collection_name=collection_name,
+        )
         total = 0
         for start in range(0, len(cards), batch_size):
             batch_cards = cards[start:start + batch_size]
             batch_embeddings = embeddings[start:start + batch_size]
             points = [
-                build_entity_point(card, dense_vector, kb_version=kb_version)
+                build_entity_point(
+                    card,
+                    dense_vector,
+                    kb_version=kb_version,
+                    point_id=existing_point_ids.get(entity_identity_key(card)),
+                )
                 for card, dense_vector in zip(batch_cards, batch_embeddings)
             ]
             await client.upsert(collection_name=collection_name, points=points)
@@ -211,6 +259,45 @@ async def upsert_entity_cards(
     finally:
         if owns_client:
             await client.close()
+
+
+async def _load_existing_entity_point_ids(client: Any, collection_name: str) -> dict[str, str]:
+    """Read existing entity-card point IDs by canonical identity.
+
+    This helper never mutates Qdrant. Duplicate identities are treated as an
+    apply blocker because blindly upserting could leave stale duplicates.
+    """
+
+    point_ids: dict[str, str] = {}
+    duplicates: dict[str, list[str]] = {}
+    offset: Any = None
+    while True:
+        points, offset = await client.scroll(
+            collection_name=collection_name,
+            limit=256,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+        for point in points:
+            payload = point.payload or {}
+            try:
+                identity = entity_identity_key(payload)
+            except ValueError:
+                continue
+            point_id = str(point.id)
+            if identity in point_ids and point_ids[identity] != point_id:
+                duplicates.setdefault(identity, [point_ids[identity]]).append(point_id)
+                continue
+            point_ids[identity] = point_id
+        if offset is None:
+            break
+    if duplicates:
+        raise RuntimeError(
+            "Duplicate existing Qdrant entity identities block safe upsert: "
+            + ", ".join(f"{identity}={ids}" for identity, ids in sorted(duplicates.items()))
+        )
+    return point_ids
 
 
 def _validate_entity_collection_schema(
@@ -269,6 +356,7 @@ __all__ = [
     "build_entity_point",
     "build_entity_point_payload",
     "ensure_entity_collection",
+    "entity_identity_key",
     "entity_point_id",
     "get_chunk_collection_name",
     "get_entity_collection_name",

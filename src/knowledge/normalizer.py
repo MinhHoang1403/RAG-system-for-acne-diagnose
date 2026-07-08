@@ -10,6 +10,11 @@ from typing import Any
 import yaml
 
 from src.knowledge.schemas import EntityCard, EntityType, canonical_text_key
+from src.knowledge.taxonomy_models import (
+    TaxonomyCatalog,
+    load_taxonomy_catalog,
+    normalize_taxonomy_alias,
+)
 
 
 DEFAULT_TAXONOMY_PATH = Path(__file__).resolve().parents[2] / "data" / "taxonomy" / "drug_aliases.yaml"
@@ -26,10 +31,7 @@ SECTION_TO_ENTITY_TYPE: dict[str, EntityType] = {
 def normalize_text_key(text: str) -> str:
     """Normalize free text while preserving Vietnamese characters."""
 
-    normalized = unicodedata.normalize("NFKC", text or "")
-    normalized = normalized.replace("-", " ").replace("_", " ")
-    normalized = re.sub(r"\s+", " ", normalized.strip().lower())
-    return normalized
+    return normalize_taxonomy_alias(text)
 
 
 def _ascii_text_key(text: str) -> str:
@@ -84,6 +86,10 @@ class DrugEntityNormalizer:
         return data
 
     def _build_indexes(self) -> None:
+        if "entities" in self.taxonomy:
+            self._build_indexes_from_v2_catalog(load_taxonomy_catalog(self.taxonomy_path))
+            return
+
         for section, entity_type in SECTION_TO_ENTITY_TYPE.items():
             entries = self.taxonomy.get(section, {}) or {}
             if not isinstance(entries, dict):
@@ -94,15 +100,39 @@ class DrugEntityNormalizer:
                 card = self._entry_to_card(entity_type, str(canonical_key), raw_entry)
                 lookup_keys = {
                     normalize_text_key(str(canonical_key)),
+                    _ascii_text_key(str(canonical_key)),
                     normalize_text_key(card.canonical_name),
+                    _ascii_text_key(card.canonical_name),
                 }
                 lookup_keys.update(normalize_text_key(alias) for alias in card.aliases)
+                lookup_keys.update(_ascii_text_key(alias) for alias in card.aliases)
                 for key in lookup_keys:
                     self.alias_index.setdefault(key, [])
                     if card not in self.alias_index[key]:
                         self.alias_index[key].append(card)
                 self.cards_by_type[entity_type][normalize_text_key(str(canonical_key))] = card
                 self.cards_by_type[entity_type][normalize_text_key(card.canonical_name)] = card
+
+    def _build_indexes_from_v2_catalog(self, catalog: TaxonomyCatalog) -> None:
+        self.taxonomy_version = catalog.taxonomy_version
+        for card in catalog.to_entity_cards(verified_only=True):
+            lookup_keys = {
+                normalize_text_key(card.canonical_name),
+                _ascii_text_key(card.canonical_name),
+                *[normalize_text_key(alias) for alias in card.aliases],
+                *[_ascii_text_key(alias) for alias in card.aliases],
+            }
+            taxonomy_key = card.metadata.get("taxonomy_key")
+            if isinstance(taxonomy_key, str):
+                lookup_keys.add(normalize_text_key(taxonomy_key))
+                lookup_keys.add(_ascii_text_key(taxonomy_key))
+            for key in lookup_keys:
+                self.alias_index.setdefault(key, [])
+                if card not in self.alias_index[key]:
+                    self.alias_index[key].append(card)
+            self.cards_by_type[card.entity_type][normalize_text_key(card.canonical_name)] = card
+            if isinstance(taxonomy_key, str):
+                self.cards_by_type[card.entity_type][normalize_text_key(taxonomy_key)] = card
 
     def _entry_to_card(
         self,
@@ -134,12 +164,13 @@ class DrugEntityNormalizer:
         """Find entity aliases inside text using normalized token boundaries."""
 
         normalized_text = normalize_text_key(text)
+        ascii_text = _ascii_text_key(text)
         matches: list[EntityCard] = []
         for alias_key in sorted(self.alias_index, key=len, reverse=True):
             if not alias_key:
                 continue
             pattern = rf"(?<!\w){re.escape(alias_key)}(?!\w)"
-            if re.search(pattern, normalized_text, flags=re.UNICODE):
+            if re.search(pattern, normalized_text, flags=re.UNICODE) or re.search(pattern, ascii_text, flags=re.UNICODE):
                 matches.extend(self.alias_index[alias_key])
         return self._dedupe_cards(matches)
 
