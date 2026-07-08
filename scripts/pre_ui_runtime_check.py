@@ -63,6 +63,13 @@ async def run_pre_ui_runtime_check() -> dict[str, Any]:
     checks.append(check("cache_version", get_answer_cache_version() == "v5", {"answer_cache_version": get_answer_cache_version()}))
     checks.append(
         check(
+            "neo4j_schema_version",
+            manifest.get("neo4j_schema_version") == "neo4j_schema_v1",
+            {"neo4j_schema_version": manifest.get("neo4j_schema_version")},
+        )
+    )
+    checks.append(
+        check(
             "env_runtime_core",
             env_summary.get("QDRANT_COLLECTION_NAME") == "acne_knowledge"
             and env_summary.get("CHUNK_QDRANT_COLLECTION_NAME") == "acne_knowledge"

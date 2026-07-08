@@ -575,6 +575,20 @@ Deterministic Neo4j entity graph:
 .\venv\Scripts\python.exe scripts\build_entity_graph.py --apply-schema --upsert --validate
 ```
 
+Neo4j runtime schema validation is read-only and checks the deterministic graph
+contract used by Phase 2 retrieval:
+
+```powershell
+.\venv\Scripts\python.exe scripts\validate_neo4j_schema.py
+.\venv\Scripts\python.exe scripts\eval_neo4j_schema_hardening.py --mode offline
+.\venv\Scripts\python.exe scripts\eval_neo4j_schema_hardening.py --mode integration
+```
+
+The canonical runtime graph uses `canonical_name`, `entity_type`, `aliases`,
+`metadata_json`, version fields, and relationship properties such as `source`
+and `created_by`. Legacy static property access like `n.name`, `n.description`,
+or `r.evidence` is intentionally not used in runtime Cypher.
+
 Qdrant KB validation:
 
 ```powershell
@@ -650,6 +664,8 @@ Acne Advisor AI chỉ phục vụ mục đích tham khảo và hỗ trợ cung c
 - Answer Quality Verifier hiện là deterministic rule-based verifier, không phải
   LLM medical reviewer.
 - Neo4j runtime context hiện là 1-hop supplemental context.
+- Neo4j schema validation depends on a reachable local Neo4j instance for
+  integration mode; offline mode uses fake snapshots only.
 - Code vẫn import package `google.generativeai` đã deprecated và có thể phát
   `FutureWarning`; migration sang `google.genai` là việc tương lai.
 - Docker Compose có thể báo Qdrant `unhealthy` dù Qdrant API và application

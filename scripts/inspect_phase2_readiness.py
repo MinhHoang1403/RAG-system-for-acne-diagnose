@@ -206,6 +206,8 @@ def inspect_runtime_code() -> dict[str, Any]:
     runtime_smoke_path = PROJECT_ROOT / "scripts" / "smoke_phase2_runtime.py"
     cache_versioning_path = PROJECT_ROOT / "src" / "observability" / "versioning.py"
     observability_exporter_path = PROJECT_ROOT / "src" / "observability" / "trace_exporter.py"
+    neo4j_queries_path = PROJECT_ROOT / "src" / "database" / "neo4j_queries.py"
+    neo4j_validator_path = PROJECT_ROOT / "scripts" / "validate_neo4j_schema.py"
     debug_report_path = PROJECT_ROOT / "scripts" / "generate_phase2_debug_report.py"
     all_eval_path = PROJECT_ROOT / "scripts" / "eval_phase2_all.py"
     cache_inspect_path = PROJECT_ROOT / "scripts" / "inspect_cache_versions.py"
@@ -213,6 +215,7 @@ def inspect_runtime_code() -> dict[str, Any]:
     runtime_smoke_source = runtime_smoke_path.read_text(encoding="utf-8") if runtime_smoke_path.exists() else ""
     cache_versioning_source = cache_versioning_path.read_text(encoding="utf-8") if cache_versioning_path.exists() else ""
     observability_exporter_source = observability_exporter_path.read_text(encoding="utf-8") if observability_exporter_path.exists() else ""
+    neo4j_queries_source = neo4j_queries_path.read_text(encoding="utf-8") if neo4j_queries_path.exists() else ""
 
     return {
         "current_capabilities": {
@@ -250,6 +253,14 @@ def inspect_runtime_code() -> dict[str, Any]:
             "runtime_circuit_breaker_enabled": resilience_circuit_path.exists()
             and "CircuitBreaker" in llm_provider_source,
             "runtime_resilience_versioned": "runtime_resilience_version" in cache_versioning_source,
+            "neo4j_schema_contract_present": "CANONICAL_NODE_SCHEMAS" in (
+                PROJECT_ROOT / "src" / "knowledge" / "graph_schema.py"
+            ).read_text(encoding="utf-8"),
+            "neo4j_schema_validator_present": neo4j_validator_path.exists(),
+            "neo4j_legacy_property_warnings_resolved": ".name" not in neo4j_queries_source
+            and ".description" not in neo4j_queries_source
+            and ".evidence" not in neo4j_queries_source,
+            "neo4j_schema_versioned": "neo4j_schema_version" in cache_versioning_source,
             "answer_guard_integrated": "answer_quality" in agent_graph_source
             and "cache_store" in agent_graph_source,
             "answer_quality_eval_available": answer_quality_eval_path.exists(),
