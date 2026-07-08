@@ -11,11 +11,6 @@ Current deterministic graph:
                   SafetyContext
     Node props  : canonical_name, entity_id, aliases, metadata_json, ...
     Relationships : HAS_ACTIVE_INGREDIENT, BELONGS_TO_CLASS
-
-Legacy LLM graph:
-    Node labels : DISEASE, DRUG, SYMPTOM, TREATMENT, MECHANISM, BODY_PART
-    Node props  : name, description, created_at
-    Relationships : CAUSES, TREATS, CONTRAINDICATES, PART_OF
 """
 
 from __future__ import annotations
@@ -23,6 +18,8 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any
+
+from src.database.neo4j_queries import ENTITY_CONTEXT_CYPHER, KEYWORD_SEARCH_CYPHER
 
 logger = logging.getLogger(__name__)
 
@@ -32,54 +29,15 @@ logger = logging.getLogger(__name__)
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
-
-
-ENTITY_CONTEXT_CYPHER = """
-MATCH (n)
-WHERE n.canonical_name IN $canonical_names
-   OR toLower(coalesce(n.canonical_name, n.name, '')) IN $legacy_names
-OPTIONAL MATCH (n)-[r]-(m)
-RETURN coalesce(n.canonical_name, n.name) AS entity,
-       labels(n)[0] AS entity_type,
-       coalesce(n.description, n.metadata_json, '') AS description,
-       type(r) AS relationship,
-       coalesce(m.canonical_name, m.name) AS related_entity,
-       CASE WHEN m IS NULL THEN null ELSE labels(m)[0] END AS related_type,
-       coalesce(m.description, m.metadata_json, '') AS related_description,
-       CASE WHEN r IS NULL THEN null
-            ELSE coalesce(r.evidence, r.source, r.created_by, '')
-       END AS evidence
-LIMIT $limit
-"""
-
-
-KEYWORD_SEARCH_CYPHER = """
-MATCH (n)
-WHERE ANY(
-    kw IN $keywords
-    WHERE toLower(coalesce(n.canonical_name, n.name, '')) CONTAINS kw
-)
-OPTIONAL MATCH (n)-[r]-(m)
-RETURN coalesce(n.canonical_name, n.name) AS entity,
-       labels(n)[0] AS entity_type,
-       coalesce(n.description, n.metadata_json, '') AS description,
-       type(r) AS relationship,
-       coalesce(m.canonical_name, m.name) AS related_entity,
-       CASE WHEN m IS NULL THEN null ELSE labels(m)[0] END AS related_type,
-       coalesce(m.description, m.metadata_json, '') AS related_description,
-       CASE WHEN r IS NULL THEN null
-            ELSE coalesce(r.evidence, r.source, r.created_by, '')
-       END AS evidence
-LIMIT $limit
-"""
+NEO4J_DATABASE = os.getenv("NEO4J_DATABASE") or None
 
 
 def _normalize_entity_names(entity_names: list[str]) -> tuple[list[str], list[str]]:
-    """Return exact canonical names and lowercased legacy lookup names."""
+    """Return exact names plus casefolded canonical/alias lookup names."""
     cleaned = [name.strip() for name in entity_names if name and name.strip()]
     canonical_names = sorted(set(cleaned), key=str.casefold)
-    legacy_names = sorted({name.casefold() for name in cleaned})
-    return canonical_names, legacy_names
+    lookup_names = sorted({name.casefold() for name in cleaned})
+    return canonical_names, lookup_names
 
 
 def _normalize_keywords(keywords: list[str]) -> list[str]:
@@ -123,7 +81,7 @@ class Neo4jGraphStore:
         ----------
         entity_names : list[str]
             Entity names to look up. Current deterministic graph matches
-            ``canonical_name``; legacy graph matches lowercased ``name``.
+            ``canonical_name``.
         limit : int
             Maximum number of fact records to return.
 
@@ -137,19 +95,19 @@ class Neo4jGraphStore:
         if not entity_names:
             return []
 
-        canonical_names, legacy_names = _normalize_entity_names(entity_names)
+        canonical_names, lookup_names = _normalize_entity_names(entity_names)
 
-        if not canonical_names and not legacy_names:
+        if not canonical_names and not lookup_names:
             return []
 
         facts: list[dict[str, Any]] = []
 
         try:
-            async with self._driver.session() as session:
+            async with self._driver.session(database=NEO4J_DATABASE) as session:
                 result = await session.run(
                     ENTITY_CONTEXT_CYPHER,
                     canonical_names=canonical_names,
-                    legacy_names=legacy_names,
+                    lookup_names=lookup_names,
                     limit=limit,
                 )
                 records = [record async for record in result]
@@ -174,7 +132,7 @@ class Neo4jGraphStore:
 
         logger.debug(
             "Neo4j: queried %d entity names → %d facts",
-            len(set(canonical_names + legacy_names)),
+            len(set(canonical_names + lookup_names)),
             len(facts),
         )
 
@@ -207,7 +165,7 @@ class Neo4jGraphStore:
         facts: list[dict[str, Any]] = []
 
         try:
-            async with self._driver.session() as session:
+            async with self._driver.session(database=NEO4J_DATABASE) as session:
                 result = await session.run(
                     KEYWORD_SEARCH_CYPHER,
                     keywords=keywords,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from typing import Any
 
 from src.knowledge.schemas import EntityCard
@@ -38,6 +39,90 @@ RELATIONSHIP_PROPERTIES = {
     "source": "taxonomy",
     "confidence": 1.0,
     "created_by": "entity_graph_builder",
+}
+
+NEO4J_SCHEMA_VERSION = "neo4j_schema_v1"
+
+CANONICAL_ENTITY_GRAPH_LABELS = (
+    "ActiveIngredient",
+    "Condition",
+    "DrugClass",
+    "DrugProduct",
+    "SafetyContext",
+)
+
+CANONICAL_ENTITY_GRAPH_RELATIONSHIPS = (
+    "BELONGS_TO_CLASS",
+    "HAS_ACTIVE_INGREDIENT",
+)
+
+LEGACY_GRAPH_PROPERTIES = ("name", "description", "evidence")
+
+
+@dataclass(frozen=True)
+class NodeSchema:
+    label: str
+    required_properties: frozenset[str]
+    optional_properties: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class RelationshipSchema:
+    relationship_type: str
+    source_labels: frozenset[str]
+    target_labels: frozenset[str]
+    required_properties: frozenset[str]
+    optional_properties: frozenset[str] = frozenset()
+
+
+_CANONICAL_NODE_REQUIRED_PROPERTIES = frozenset(
+    {
+        "aliases",
+        "canonical_name",
+        "entity_schema_version",
+        "entity_type",
+        "kb_version",
+        "metadata_json",
+        "source_ids",
+        "taxonomy_version",
+    }
+)
+_CANONICAL_NODE_OPTIONAL_PROPERTIES = frozenset({"created_at", "entity_id", "updated_at"})
+_CANONICAL_REL_REQUIRED_PROPERTIES = frozenset(
+    {
+        "confidence",
+        "created_by",
+        "kb_version",
+        "source",
+        "taxonomy_version",
+    }
+)
+_CANONICAL_REL_OPTIONAL_PROPERTIES = frozenset({"created_at", "updated_at"})
+
+CANONICAL_NODE_SCHEMAS: dict[str, NodeSchema] = {
+    label: NodeSchema(
+        label=label,
+        required_properties=_CANONICAL_NODE_REQUIRED_PROPERTIES,
+        optional_properties=_CANONICAL_NODE_OPTIONAL_PROPERTIES,
+    )
+    for label in CANONICAL_ENTITY_GRAPH_LABELS
+}
+
+CANONICAL_RELATIONSHIP_SCHEMAS: dict[str, RelationshipSchema] = {
+    "HAS_ACTIVE_INGREDIENT": RelationshipSchema(
+        relationship_type="HAS_ACTIVE_INGREDIENT",
+        source_labels=frozenset({"DrugProduct"}),
+        target_labels=frozenset({"ActiveIngredient"}),
+        required_properties=_CANONICAL_REL_REQUIRED_PROPERTIES,
+        optional_properties=_CANONICAL_REL_OPTIONAL_PROPERTIES,
+    ),
+    "BELONGS_TO_CLASS": RelationshipSchema(
+        relationship_type="BELONGS_TO_CLASS",
+        source_labels=frozenset({"DrugProduct", "ActiveIngredient"}),
+        target_labels=frozenset({"DrugClass"}),
+        required_properties=_CANONICAL_REL_REQUIRED_PROPERTIES,
+        optional_properties=_CANONICAL_REL_OPTIONAL_PROPERTIES,
+    ),
 }
 
 
@@ -261,6 +346,14 @@ __all__ = [
     "ENTITY_GRAPH_LABELS",
     "ENTITY_GRAPH_RELATIONSHIPS",
     "ENTITY_TYPE_TO_LABEL",
+    "CANONICAL_ENTITY_GRAPH_LABELS",
+    "CANONICAL_ENTITY_GRAPH_RELATIONSHIPS",
+    "CANONICAL_NODE_SCHEMAS",
+    "CANONICAL_RELATIONSHIP_SCHEMAS",
+    "LEGACY_GRAPH_PROPERTIES",
+    "NEO4J_SCHEMA_VERSION",
+    "NodeSchema",
+    "RelationshipSchema",
     "build_entity_graph_records",
     "get_entity_graph_constraints",
     "get_entity_graph_indexes",
