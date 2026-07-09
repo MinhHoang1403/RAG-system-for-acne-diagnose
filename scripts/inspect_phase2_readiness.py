@@ -315,8 +315,12 @@ def _display_rerank_provider() -> str:
     provider = rerank_provider_from_env().strip().lower()
     if provider in {"", "local", "local_rules"}:
         return "local_rules"
-    if provider == "local_model":
-        return "local_model (fallbacks to local_rules when unavailable)"
+    if provider in {"local_model", "local_semantic", "local_cross_encoder", "semantic"}:
+        suffix = "available" if _semantic_model_available() else "not provisioned; falls back to local_rules"
+        return f"{provider} ({suffix})"
+    if provider == "hybrid":
+        suffix = "semantic model available" if _semantic_model_available() else "semantic model missing; falls back to local_rules"
+        return f"hybrid ({suffix})"
     return f"{provider} (unknown; runtime falls back to local_rules)"
 
 

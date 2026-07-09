@@ -154,7 +154,8 @@ def test_side_effect_and_safety_metadata_are_prioritized():
     assert safety_ranked[0].candidate_id == "pregnancy"
 
 
-def test_provider_fallbacks_do_not_crash():
+def test_provider_fallbacks_do_not_crash(monkeypatch):
+    monkeypatch.setenv("SEMANTIC_RERANK_MODEL_PATH", "")
     normalized = normalize_query("Adapalene có phải kháng sinh không?")
     candidates = [_entity("adapalene", "adapalene", "active_ingredient", drug_class=["topical_retinoid"])]
 
