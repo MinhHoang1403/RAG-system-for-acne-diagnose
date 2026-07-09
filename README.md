@@ -66,7 +66,8 @@ Checkpoint ổn định:
 - Tách riêng chunk collection và entity collection trong Qdrant.
 - Metadata boosting theo các trường chuyên biệt của miền da liễu/mụn.
 - Candidate merge giữa entity cards và evidence chunks.
-- Deterministic local reranking qua `RERANK_PROVIDER=local_rules`.
+- Deterministic local reranking qua `RERANK_PROVIDER=local_rules`, kèm contract
+  provider cho semantic reranker local-only và hybrid fallback.
 - Intent-aware context packing trước bước generation.
 - LangGraph runtime gồm cache lookup, guardrail, retrieval, generation,
   answer verification, cache store và observability export tùy chọn.
@@ -145,7 +146,9 @@ và package `src/retrieval/`:
 7. Query-adaptive dermatology metadata boost.
 8. Entity-card retrieval từ `ENTITY_QDRANT_COLLECTION_NAME`.
 9. Candidate merge giữa entity candidates và chunk candidates.
-10. Local deterministic reranking.
+10. Reranking qua provider contract. Default runtime là deterministic
+    `local_rules`; semantic/hybrid chỉ dùng local model nếu được provision bằng
+    `SEMANTIC_RERANK_MODEL_PATH`.
 11. Intent-aware context packing.
 12. Neo4j 1-hop graph enrichment.
 13. Prompt generation, answer quality verification, cache store và observability
@@ -326,6 +329,8 @@ bạn muốn chạy. Không commit `.env`.
 | Rerank | `RERANK_ENABLED` | `true` |
 | Rerank | `RERANK_PROVIDER` | `local_rules` |
 | Rerank | `RERANK_TOP_N` | `8` |
+| Rerank | `SEMANTIC_RERANK_MODEL_PATH` | rỗng, không tự download model |
+| Rerank | `SEMANTIC_RERANK_ALLOW_FALLBACK` | `true` |
 | Answer guard | `ANSWER_VERIFIER_ENABLED` | `true` |
 | Answer guard | `ANSWER_GUARD_MODE` | `metadata_only` |
 | Answer guard | `ANSWER_VERIFIER_STRICT` | `false` |
@@ -453,6 +458,7 @@ Aggregate suite này chạy:
 - `scripts/eval_phase2_retrieval.py`
 - `scripts/eval_phase2_context_packing.py`
 - `scripts/eval_phase2_reranking.py`
+- `scripts/eval_semantic_reranker.py --mode offline`
 - `scripts/eval_phase2_answer_quality.py`
 - `scripts/smoke_phase2_runtime.py --mode offline`
 - `scripts/inspect_cache_versions.py`
@@ -676,8 +682,11 @@ Acne Advisor AI chỉ phục vụ mục đích tham khảo và hỗ trợ cung c
 
 - Chưa có web fallback.
 - Chưa có production external reranker.
-- `RERANK_PROVIDER=local_model` là extension point và fallback về `local_rules`
-  để tránh tự động download model.
+- Semantic reranker production chỉ được bật khi có local model path. Loader
+  dùng local-only mode và không tự tải model. Nếu model thiếu hoặc lỗi,
+  semantic/hybrid fallback về `local_rules`.
+- Offline semantic reranker eval dùng fake backend deterministic để kiểm tra
+  pipeline/metrics/fallback; đây không phải bằng chứng quality của live model.
 - Answer Quality Verifier hiện là deterministic rule-based verifier, không phải
   LLM medical reviewer.
 - Neo4j runtime context hiện là 1-hop supplemental context.

@@ -36,6 +36,7 @@ from src.knowledge.entity_index import (  # noqa: E402
 from src.knowledge.versioning import get_embedding_metadata  # noqa: E402
 from src.observability.versioning import get_answer_cache_version  # noqa: E402
 from src.retrieval.reranker import rerank_provider_from_env  # noqa: E402
+from src.retrieval.reranking.providers import semantic_config_from_env  # noqa: E402
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -196,6 +197,9 @@ def inspect_runtime_code() -> dict[str, Any]:
     query_normalization_source = (PROJECT_ROOT / "src" / "retrieval" / "query_normalization.py").read_text(encoding="utf-8")
     context_packer_source = (PROJECT_ROOT / "src" / "retrieval" / "context_packer.py").read_text(encoding="utf-8")
     reranker_source = (PROJECT_ROOT / "src" / "retrieval" / "reranker.py").read_text(encoding="utf-8")
+    reranking_contracts_source = (PROJECT_ROOT / "src" / "retrieval" / "reranking" / "contracts.py").read_text(encoding="utf-8")
+    reranking_providers_source = (PROJECT_ROOT / "src" / "retrieval" / "reranking" / "providers.py").read_text(encoding="utf-8")
+    reranking_metrics_source = (PROJECT_ROOT / "src" / "retrieval" / "reranking" / "metrics.py").read_text(encoding="utf-8")
     agent_graph_source = (PROJECT_ROOT / "src" / "agent" / "graph.py").read_text(encoding="utf-8")
     llm_provider_source = (PROJECT_ROOT / "src" / "agent" / "llm" / "provider.py").read_text(encoding="utf-8")
     resilience_provider_path = PROJECT_ROOT / "src" / "resilience" / "provider.py"
@@ -244,6 +248,12 @@ def inspect_runtime_code() -> dict[str, Any]:
             and "PackedContext" in context_packer_source,
             "local_reranker_available": "def rerank_candidates" in reranker_source
             and "local_rules" in reranker_source,
+            "reranker_provider_contract_present": "class RerankCandidate" in reranking_contracts_source
+            and "class RerankScore" in reranking_contracts_source,
+            "semantic_reranker_adapter_present": "local_files_only=True" in reranking_providers_source
+            and "LocalSemanticReranker" in reranking_providers_source,
+            "reranker_fallback_present": "falling back to local_rules" in reranker_source,
+            "reranker_metrics_present": "def ranking_metrics" in reranking_metrics_source,
             "reranking_integrated": "rerank_candidates" in retriever_source
             and "rerank_trace" in retriever_source,
             "answer_quality_verifier_available": "def verify_answer_quality" in answer_verifier_source
@@ -289,6 +299,8 @@ def inspect_runtime_code() -> dict[str, Any]:
             "phase2_all_eval_available": all_eval_path.exists(),
         },
         "rerank_provider_default": _display_rerank_provider(),
+        "reranker_pipeline_version": cache_versioning_source and "reranker_pipeline_v2" in cache_versioning_source,
+        "semantic_model_available": _semantic_model_available(),
         "deferred_phase2_features": [
             "Add external rerank provider or installed local model reranker.",
             "Add optional LLM-backed medical answer reviewer for complex answers.",
@@ -303,9 +315,18 @@ def _display_rerank_provider() -> str:
     provider = rerank_provider_from_env().strip().lower()
     if provider in {"", "local", "local_rules"}:
         return "local_rules"
-    if provider == "local_model":
-        return "local_model (fallbacks to local_rules when unavailable)"
+    if provider in {"local_model", "local_semantic", "local_cross_encoder", "semantic"}:
+        suffix = "available" if _semantic_model_available() else "not provisioned; falls back to local_rules"
+        return f"{provider} ({suffix})"
+    if provider == "hybrid":
+        suffix = "semantic model available" if _semantic_model_available() else "semantic model missing; falls back to local_rules"
+        return f"hybrid ({suffix})"
     return f"{provider} (unknown; runtime falls back to local_rules)"
+
+
+def _semantic_model_available() -> bool:
+    config = semantic_config_from_env()
+    return bool(config.model_path and Path(config.model_path).exists())
 
 
 async def main() -> int:

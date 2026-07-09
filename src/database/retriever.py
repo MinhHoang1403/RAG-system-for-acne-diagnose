@@ -40,6 +40,7 @@ from src.retrieval.reranker import (
     rerank_provider_from_env,
     rerank_top_n_from_env,
 )
+from src.resilience.contracts import runtime_resilience_settings_from_env
 
 # Phase 1.5 — Dermatology-aware query boost
 from src.ingestion.domain_metadata import extract_dermatology_metadata
@@ -368,6 +369,7 @@ class HybridRetriever:
         )
         t_rerank_start = time.time()
         rerank_top_n = rerank_top_n_from_env(default=max(top_k * 2, 8))
+        rerank_timeout_seconds = runtime_resilience_settings_from_env().rerank_timeout_seconds
         if rerank_enabled_from_env():
             try:
                 reranked_candidates, rerank_trace = await asyncio.wait_for(
@@ -378,8 +380,9 @@ class HybridRetriever:
                         expansion=expansion,
                         top_n=rerank_top_n,
                         provider=rerank_provider_from_env(),
+                        timeout_seconds=rerank_timeout_seconds,
                     ),
-                    timeout=float(os.getenv("RERANK_TIMEOUT_SECONDS", "20")),
+                    timeout=rerank_timeout_seconds,
                 )
             except asyncio.TimeoutError:
                 warning = "Reranker timed out; using merged candidate order."

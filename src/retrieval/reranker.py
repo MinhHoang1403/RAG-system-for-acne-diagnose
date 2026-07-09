@@ -15,6 +15,18 @@ from src.retrieval.contracts import (
     RerankTrace,
     RetrievedCandidate,
 )
+from src.retrieval.reranking.contracts import RerankCandidate, RerankScore, RerankerUnavailable, sort_scores
+from src.retrieval.reranking.normalization import normalize_score_map, sanitize_score
+from src.retrieval.reranking.providers import (
+    LocalSemanticReranker,
+    PROVIDER_HYBRID,
+    PROVIDER_LOCAL_RULES,
+    PROVIDER_LOCAL_SEMANTIC,
+    build_semantic_reranker_from_env,
+    canonical_provider_name,
+    hybrid_config_from_env,
+    hybrid_fuse_scores,
+)
 
 LOCAL_RULE_PROVIDERS = {"local", "local_rules", ""}
 DRUG_INTENTS = {"drug_identity", "ingredient_question", "class_check"}
@@ -26,14 +38,17 @@ def rerank_candidates(
     expansion: QueryExpansion | None = None,
     top_n: int = 8,
     provider: str = "local_rules",
+    semantic_reranker: LocalSemanticReranker | None = None,
+    timeout_seconds: float | None = None,
 ) -> tuple[list[RetrievedCandidate], RerankTrace]:
-    """Rerank candidates deterministically without external API calls."""
+    """Rerank candidates deterministically with local-only provider fallback."""
 
     started = time.perf_counter()
     warnings: list[str] = []
     requested_provider = (provider or "local_rules").strip().lower()
     actual_provider = _resolve_provider(requested_provider, warnings)
     safe_top_n = max(0, int(top_n or 0))
+    fallback_used = False
 
     if not candidates or safe_top_n == 0:
         trace = RerankTrace(
@@ -48,46 +63,72 @@ def rerank_candidates(
         )
         return [], trace
 
-    scored = [
-        _score_candidate(
-            candidate=candidate,
-            normalized_query=normalized_query,
-            expansion=expansion,
-        )
-        for candidate in candidates
+    rerank_inputs = [
+        _to_rerank_candidate(candidate, index + 1)
+        for index, candidate in enumerate(candidates)
     ]
-    scored.sort(
-        key=lambda item: (
-            item.score_breakdown.final_score,
-            item.candidate.fused_score if item.candidate.fused_score is not None else item.candidate.score or 0.0,
-        ),
-        reverse=True,
-    )
+
+    try:
+        scores, breakdowns, actual_provider, fallback_used = _score_with_provider(
+            normalized_query=normalized_query,
+            candidates=candidates,
+            rerank_inputs=rerank_inputs,
+            expansion=expansion,
+            requested_provider=requested_provider,
+            actual_provider=actual_provider,
+            warnings=warnings,
+            top_n=safe_top_n,
+            semantic_reranker=semantic_reranker,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as exc:
+        warning = f"local_rules failed; using retrieval order fallback: {exc}"
+        warnings.append(warning)
+        actual_provider = "retrieval_order"
+        fallback_used = True
+        scores = _retrieval_order_scores(rerank_inputs)
+        breakdowns = {
+            score.candidate_id: RerankScoreBreakdown(
+                base_score=score.retrieval_score,
+                retrieval_score=score.retrieval_score,
+                final_score=score.final_score,
+                reasons=[warning],
+            )
+            for score in scores
+        }
 
     ranked: list[RerankedCandidate] = []
     output: list[RetrievedCandidate] = []
-    for index, item in enumerate(scored[:safe_top_n], start=1):
-        debug = dict(item.candidate.debug)
+    candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
+    for index, score in enumerate(scores[:safe_top_n], start=1):
+        source_candidate = candidate_by_id[score.candidate_id]
+        breakdown = breakdowns[score.candidate_id]
+        debug = dict(source_candidate.debug)
         debug.update(
             {
                 "rerank_provider": actual_provider,
-                "rerank_score": item.score_breakdown.final_score,
+                "rerank_provider_requested": requested_provider,
+                "rerank_fallback_used": fallback_used,
+                "rerank_score": score.final_score,
+                "rerank_rule_score": score.rule_score,
+                "rerank_semantic_score": score.semantic_score,
+                "rerank_retrieval_score": score.retrieval_score,
                 "rerank_rank": index,
-                "rerank_reasons": item.score_breakdown.reasons,
+                "rerank_reasons": breakdown.reasons,
             }
         )
-        candidate = item.candidate.model_copy(
+        candidate = source_candidate.model_copy(
             update={
-                "fused_score": item.score_breakdown.final_score,
+                "fused_score": score.final_score,
                 "rank": index,
                 "debug": debug,
             }
         )
         reranked = RerankedCandidate(
             candidate=candidate,
-            rerank_score=item.score_breakdown.final_score,
+            rerank_score=score.final_score,
             rerank_rank=index,
-            score_breakdown=item.score_breakdown,
+            score_breakdown=breakdown,
         )
         ranked.append(reranked)
         output.append(candidate)
@@ -100,29 +141,216 @@ def rerank_candidates(
         top_n=safe_top_n,
         ranked_candidates=ranked,
         warnings=warnings,
-        timings_ms={"total": round((time.perf_counter() - started) * 1000, 3)},
+        timings_ms={
+            "total": round((time.perf_counter() - started) * 1000, 3),
+        },
+        requested_provider=requested_provider,
+        fallback_used=fallback_used,
+        semantic_model_available=_semantic_model_available(semantic_reranker),
     )
     return output, trace
 
 
 def _resolve_provider(provider: str, warnings: list[str]) -> str:
-    if provider in LOCAL_RULE_PROVIDERS:
-        return "local_rules"
-    if provider == "local_model":
-        try:
-            import sentence_transformers  # noqa: F401  # type: ignore[import]
-        except Exception as exc:
-            warnings.append(
-                "RERANK_PROVIDER=local_model requested but sentence-transformers/model "
-                f"is unavailable; falling back to local_rules: {exc}"
-            )
-            return "local_rules"
-        warnings.append(
-            "RERANK_PROVIDER=local_model interface is reserved; local_rules used to avoid model download."
-        )
-        return "local_rules"
+    canonical = canonical_provider_name(provider)
+    if canonical in {PROVIDER_LOCAL_RULES, PROVIDER_LOCAL_SEMANTIC, PROVIDER_HYBRID}:
+        return canonical
     warnings.append(f"Unknown rerank provider {provider!r}; falling back to local_rules.")
-    return "local_rules"
+    return PROVIDER_LOCAL_RULES
+
+
+def _score_with_provider(
+    *,
+    normalized_query: NormalizedQuery,
+    candidates: list[RetrievedCandidate],
+    rerank_inputs: list[RerankCandidate],
+    expansion: QueryExpansion | None,
+    requested_provider: str,
+    actual_provider: str,
+    warnings: list[str],
+    top_n: int,
+    semantic_reranker: LocalSemanticReranker | None,
+    timeout_seconds: float | None,
+) -> tuple[list[RerankScore], dict[str, RerankScoreBreakdown], str, bool]:
+    rule_scored = _score_local_rules(candidates, normalized_query, expansion)
+    rule_score_map = {
+        item.candidate.candidate_id: item.score_breakdown.final_score
+        for item in rule_scored
+    }
+    rule_normalized = normalize_score_map(rule_score_map)
+    rule_breakdowns = {
+        item.candidate.candidate_id: item.score_breakdown.model_copy(
+            update={
+                "rule_score": rule_normalized[item.candidate.candidate_id],
+                "retrieval_score": sanitize_score(_retrieval_score(item.candidate)),
+                "final_score": rule_normalized[item.candidate.candidate_id],
+            }
+        )
+        for item in rule_scored
+    }
+
+    if actual_provider == PROVIDER_LOCAL_RULES:
+        return (
+            _local_rule_scores(rerank_inputs, rule_normalized),
+            rule_breakdowns,
+            PROVIDER_LOCAL_RULES,
+            False,
+        )
+
+    reranker = semantic_reranker or build_semantic_reranker_from_env()
+    try:
+        semantic_ranked = reranker.rerank(
+            normalized_query.original_query,
+            rerank_inputs,
+            top_n=len(rerank_inputs),
+            timeout_seconds=timeout_seconds,
+        )
+        semantic_scores = {
+            score.candidate_id: sanitize_score(score.semantic_score)
+            for score in semantic_ranked
+        }
+        if actual_provider == PROVIDER_LOCAL_SEMANTIC:
+            breakdowns = {
+                score.candidate_id: RerankScoreBreakdown(
+                    base_score=score.retrieval_score,
+                    semantic_score=score.semantic_score,
+                    retrieval_score=score.retrieval_score,
+                    final_score=score.final_score,
+                    reasons=[f"semantic_backend:{score.diagnostics.get('backend', 'local')}"],
+                )
+                for score in semantic_ranked
+            }
+            return semantic_ranked[:top_n], breakdowns, PROVIDER_LOCAL_SEMANTIC, False
+
+        fused = hybrid_fuse_scores(
+            rerank_inputs,
+            semantic_scores,
+            rule_normalized,
+            config=hybrid_config_from_env(),
+        )
+        breakdowns = {
+            score.candidate_id: RerankScoreBreakdown(
+                base_score=score.retrieval_score,
+                semantic_score=score.semantic_score,
+                rule_score=score.rule_score,
+                retrieval_score=score.retrieval_score,
+                final_score=score.final_score,
+                reasons=[
+                    "hybrid_fusion",
+                    *rule_breakdowns.get(score.candidate_id, RerankScoreBreakdown()).reasons[:5],
+                ],
+            )
+            for score in fused
+        }
+        return fused[:top_n], breakdowns, PROVIDER_HYBRID, False
+    except Exception as exc:
+        allow_fallback = getattr(reranker.config, "allow_fallback", True)
+        if not allow_fallback:
+            raise
+        warnings.append(
+            f"{requested_provider} unavailable or failed; falling back to local_rules: {type(exc).__name__}: {exc}"
+        )
+        return (
+            _local_rule_scores(rerank_inputs, rule_normalized),
+            rule_breakdowns,
+            PROVIDER_LOCAL_RULES,
+            True,
+        )
+
+
+def _score_local_rules(
+    candidates: list[RetrievedCandidate],
+    normalized_query: NormalizedQuery,
+    expansion: QueryExpansion | None,
+) -> list["_Scored"]:
+    scored = [
+        _score_candidate(
+            candidate=candidate,
+            normalized_query=normalized_query,
+            expansion=expansion,
+        )
+        for candidate in candidates
+    ]
+    scored.sort(
+        key=lambda item: (
+            -item.score_breakdown.final_score,
+            item.candidate.rank if item.candidate.rank is not None else 999999,
+            item.candidate.candidate_id,
+        )
+    )
+    return scored
+
+
+def _local_rule_scores(
+    rerank_inputs: list[RerankCandidate],
+    normalized_rule_scores: dict[str, float],
+) -> list[RerankScore]:
+    scores = [
+        RerankScore(
+            candidate_id=candidate.candidate_id,
+            final_score=normalized_rule_scores.get(candidate.candidate_id, 0.0),
+            original_rank=candidate.original_rank,
+            provider=PROVIDER_LOCAL_RULES,
+            semantic_score=None,
+            rule_score=normalized_rule_scores.get(candidate.candidate_id, 0.0),
+            retrieval_score=sanitize_score(candidate.retrieval_score),
+        )
+        for candidate in rerank_inputs
+    ]
+    return sort_scores(scores)
+
+
+def _retrieval_order_scores(rerank_inputs: list[RerankCandidate]) -> list[RerankScore]:
+    if not rerank_inputs:
+        return []
+    max_rank = max(candidate.original_rank for candidate in rerank_inputs)
+    return [
+        RerankScore(
+            candidate_id=candidate.candidate_id,
+            final_score=round(1.0 - ((candidate.original_rank - 1) / max(max_rank, 1)), 6),
+            original_rank=candidate.original_rank,
+            provider="retrieval_order",
+            retrieval_score=sanitize_score(candidate.retrieval_score),
+        )
+        for candidate in rerank_inputs
+    ]
+
+
+def _to_rerank_candidate(candidate: RetrievedCandidate, fallback_rank: int) -> RerankCandidate:
+    payload = candidate.payload
+    debug = candidate.debug
+    return RerankCandidate(
+        candidate_id=candidate.candidate_id,
+        text=candidate.text or str(payload.get("text") or payload.get("content") or ""),
+        source_type=candidate.source,
+        original_rank=int(candidate.rank or fallback_rank),
+        retrieval_score=_retrieval_score(candidate),
+        dense_score=_score_from_payload_or_debug(payload, debug, "dense_score"),
+        sparse_score=_score_from_payload_or_debug(payload, debug, "sparse_score"),
+        metadata=payload,
+    )
+
+
+def _retrieval_score(candidate: RetrievedCandidate) -> float | None:
+    return candidate.fused_score if candidate.fused_score is not None else candidate.score
+
+
+def _score_from_payload_or_debug(
+    payload: dict[str, Any],
+    debug: dict[str, Any],
+    field: str,
+) -> float | None:
+    value = payload.get(field)
+    if value is None:
+        value = debug.get(field)
+    return sanitize_score(value) if value is not None else None
+
+
+def _semantic_model_available(semantic_reranker: LocalSemanticReranker | None) -> bool:
+    if semantic_reranker is not None:
+        return bool(semantic_reranker.available)
+    model_path = os.getenv("SEMANTIC_RERANK_MODEL_PATH", "").strip()
+    return bool(model_path and os.path.exists(model_path))
 
 
 class _Scored:

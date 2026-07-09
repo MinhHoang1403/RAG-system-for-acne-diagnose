@@ -39,6 +39,8 @@ SECRET_MARKERS = (
     "key",
 )
 URL_CONFIG_KEYS = {"DATABASE_URL", "REDIS_URL"}
+RERANK_PROVIDERS_WITHOUT_MODEL = {"local_rules"}
+RERANK_PROVIDERS_WITH_MODEL = {"hybrid", "local_semantic", "local_cross_encoder", "semantic", "local_model"}
 
 
 def check(name: str, passed: bool, details: dict[str, Any] | None = None, severity: str = "error") -> dict[str, Any]:
@@ -58,6 +60,7 @@ async def run_pre_ui_runtime_check() -> dict[str, Any]:
     manifest = build_pipeline_version_manifest()
     fingerprint = compute_pipeline_fingerprint(manifest)
     env_summary = _env_summary()
+    reranker_status = _reranker_runtime_status(manifest)
 
     checks.append(check("pipeline_fingerprint", bool(fingerprint), {"fingerprint": fingerprint}))
     checks.append(check("cache_version", get_answer_cache_version() == "v5", {"answer_cache_version": get_answer_cache_version()}))
@@ -82,12 +85,26 @@ async def run_pre_ui_runtime_check() -> dict[str, Any]:
             and env_summary.get("CHUNK_QDRANT_COLLECTION_NAME") == "acne_knowledge"
             and env_summary.get("ENTITY_QDRANT_COLLECTION_NAME") == "acne_entities_v1"
             and env_summary.get("NEO4J_URI") == "bolt://127.0.0.1:7687"
-            and env_summary.get("RERANK_PROVIDER") == "local_rules"
+            and _is_supported_rerank_provider(os.getenv("RERANK_PROVIDER", "local_rules"))
             and env_summary.get("AGENT_TOTAL_TIMEOUT_SECONDS") == "120"
             and env_summary.get("CIRCUIT_BREAKER_ENABLED") == "true"
             and env_summary.get("OBSERVABILITY_ENABLED") == "false"
             and env_summary.get("PHASE2_DEBUG_METADATA") == "false",
             env_summary,
+        )
+    )
+    checks.append(
+        check(
+            "reranker_hardening",
+            manifest.get("reranker_version") == "reranker_pipeline_v2"
+            and reranker_status["passed"],
+            {
+                "reranker_version": manifest.get("reranker_version"),
+                "runtime_rerank_provider": manifest.get("rerank_provider"),
+                "semantic_model_identifier": manifest.get("semantic_rerank_model_identifier"),
+                "fallback_allowed": manifest.get("semantic_rerank_allow_fallback"),
+                **reranker_status["details"],
+            },
         )
     )
 
@@ -166,6 +183,14 @@ def _env_summary() -> dict[str, str]:
         "RERANK_ENABLED",
         "RERANK_PROVIDER",
         "RERANK_TOP_N",
+        "SEMANTIC_RERANK_MODEL_PATH",
+        "SEMANTIC_RERANK_DEVICE",
+        "SEMANTIC_RERANK_BATCH_SIZE",
+        "SEMANTIC_RERANK_MAX_CANDIDATES",
+        "SEMANTIC_RERANK_ALLOW_FALLBACK",
+        "SEMANTIC_RERANK_WEIGHT",
+        "RULE_RERANK_WEIGHT",
+        "RETRIEVAL_RERANK_WEIGHT",
         "ANSWER_VERIFIER_ENABLED",
         "ANSWER_GUARD_MODE",
         "ANSWER_VERIFIER_STRICT",
@@ -195,11 +220,48 @@ def _env_summary() -> dict[str, str]:
         value = os.getenv(name, "")
         if name in URL_CONFIG_KEYS:
             summary[name] = "<CONFIGURED>" if value else "<MISSING>"
+        elif name == "SEMANTIC_RERANK_MODEL_PATH":
+            summary[name] = _summarize_model_path(value)
         elif any(marker in name.lower() for marker in SECRET_MARKERS):
             summary[name] = "<REDACTED>" if value else "<EMPTY>"
         else:
             summary[name] = value or "<MISSING>"
     return summary
+
+
+def _is_supported_rerank_provider(provider: str) -> bool:
+    normalized = (provider or "local_rules").strip().lower()
+    return normalized in RERANK_PROVIDERS_WITHOUT_MODEL | RERANK_PROVIDERS_WITH_MODEL
+
+
+def _reranker_runtime_status(manifest: dict[str, Any]) -> dict[str, Any]:
+    provider = str(manifest.get("rerank_provider") or "local_rules").strip().lower()
+    model_path = os.getenv("SEMANTIC_RERANK_MODEL_PATH", "").strip()
+    model_exists = bool(model_path and Path(model_path).exists())
+    model_identifier = str(manifest.get("semantic_rerank_model_identifier") or "").strip()
+    fallback_allowed = bool(manifest.get("semantic_rerank_allow_fallback", True))
+    details = {
+        "provider_supported": _is_supported_rerank_provider(provider),
+        "semantic_model_configured": bool(model_path),
+        "semantic_model_path_exists": model_exists,
+    }
+
+    if provider in RERANK_PROVIDERS_WITHOUT_MODEL:
+        return {"passed": True, "details": details}
+    if provider in RERANK_PROVIDERS_WITH_MODEL:
+        return {
+            "passed": bool(model_identifier and model_exists and fallback_allowed),
+            "details": details,
+        }
+    return {"passed": False, "details": details}
+
+
+def _summarize_model_path(value: str) -> str:
+    if not value:
+        return "<MISSING>"
+    path = Path(value)
+    identifier = path.name or "<CONFIGURED>"
+    return f"<CONFIGURED:{identifier};exists={str(path.exists()).lower()}>"
 
 
 def _check_frontend_config() -> dict[str, Any]:

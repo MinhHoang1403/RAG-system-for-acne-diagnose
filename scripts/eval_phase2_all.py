@@ -19,6 +19,7 @@ CHECKS = [
     ["scripts/eval_phase2_retrieval.py"],
     ["scripts/eval_phase2_context_packing.py"],
     ["scripts/eval_phase2_reranking.py"],
+    ["scripts/eval_semantic_reranker.py", "--mode", "offline"],
     ["scripts/eval_phase2_answer_quality.py"],
     ["scripts/smoke_phase2_runtime.py", "--mode", "offline"],
     ["scripts/inspect_cache_versions.py"],

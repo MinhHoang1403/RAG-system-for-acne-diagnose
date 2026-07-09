@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 
 DEFAULT_ANSWER_CACHE_VERSION = "v5"
+DEFAULT_RERANKER_VERSION = "reranker_pipeline_v2"
 LEGACY_ANSWER_CACHE_VERSIONS = {"v1", "v2", "v3", "v4"}
 
 _SECRET_KEY_MARKERS = (
@@ -38,7 +39,7 @@ def build_pipeline_version_manifest(settings: Mapping[str, Any] | None = None) -
         "phase": "phase2e",
         "retrieval_pipeline_version": value("RETRIEVAL_PIPELINE_VERSION", "retrieval_pipeline_v2"),
         "context_packer_version": value("CONTEXT_PACKER_VERSION", "context_packer_v2"),
-        "reranker_version": value("RERANKER_VERSION", "local_reranker_v1"),
+        "reranker_version": value("RERANKER_VERSION", DEFAULT_RERANKER_VERSION),
         "answer_verifier_version": value("ANSWER_VERIFIER_VERSION", "answer_verifier_v2"),
         "runtime_resilience_version": value("RUNTIME_RESILIENCE_VERSION", "runtime_resilience_v1"),
         "neo4j_schema_version": value("NEO4J_SCHEMA_VERSION", "neo4j_schema_v1"),
@@ -54,6 +55,28 @@ def build_pipeline_version_manifest(settings: Mapping[str, Any] | None = None) -
         "rerank_enabled": _env_bool(value("RERANK_ENABLED", "true"), default=True),
         "rerank_provider": value("RERANK_PROVIDER", "local_rules") or "local_rules",
         "rerank_top_n": _env_int(value("RERANK_TOP_N", "8"), default=8),
+        "semantic_rerank_model_identifier": _semantic_model_identifier(
+            value("SEMANTIC_RERANK_MODEL_PATH", "")
+        ),
+        "semantic_rerank_max_candidates": _env_int(
+            value("SEMANTIC_RERANK_MAX_CANDIDATES", "32"),
+            default=32,
+        ),
+        "semantic_rerank_max_query_chars": _env_int(
+            value("SEMANTIC_RERANK_MAX_QUERY_CHARS", "1000"),
+            default=1000,
+        ),
+        "semantic_rerank_max_document_chars": _env_int(
+            value("SEMANTIC_RERANK_MAX_DOCUMENT_CHARS", "4000"),
+            default=4000,
+        ),
+        "semantic_rerank_allow_fallback": _env_bool(
+            value("SEMANTIC_RERANK_ALLOW_FALLBACK", "true"),
+            default=True,
+        ),
+        "semantic_rerank_weight": _env_float(value("SEMANTIC_RERANK_WEIGHT", "0.70"), default=0.70),
+        "rule_rerank_weight": _env_float(value("RULE_RERANK_WEIGHT", "0.20"), default=0.20),
+        "retrieval_rerank_weight": _env_float(value("RETRIEVAL_RERANK_WEIGHT", "0.10"), default=0.10),
         "answer_verifier_enabled": _env_bool(value("ANSWER_VERIFIER_ENABLED", "true"), default=True),
         "answer_guard_mode": value("ANSWER_GUARD_MODE", "metadata_only") or "metadata_only",
     }
@@ -109,6 +132,8 @@ def pipeline_manifest_summary(manifest: dict[str, Any] | None = None) -> dict[st
         "rerank_enabled",
         "rerank_provider",
         "rerank_top_n",
+        "semantic_rerank_model_identifier",
+        "semantic_rerank_max_candidates",
         "answer_verifier_enabled",
         "answer_guard_mode",
     ]
@@ -142,6 +167,21 @@ def _env_int(value: Any, *, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _env_float(value: Any, *, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _semantic_model_identifier(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    normalized = text.replace("\\", "/").rstrip("/")
+    return normalized.split("/")[-1] or "local_model"
 
 
 def _strip_secret_keys(data: dict[str, Any]) -> dict[str, Any]:
@@ -184,6 +224,7 @@ def _runtime_entity_collection_name(settings: Mapping[str, Any]) -> str:
 
 __all__ = [
     "DEFAULT_ANSWER_CACHE_VERSION",
+    "DEFAULT_RERANKER_VERSION",
     "build_pipeline_version_manifest",
     "compute_pipeline_fingerprint",
     "current_pipeline_fingerprint",
