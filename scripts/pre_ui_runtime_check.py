@@ -90,6 +90,20 @@ async def run_pre_ui_runtime_check() -> dict[str, Any]:
             env_summary,
         )
     )
+    checks.append(
+        check(
+            "reranker_hardening",
+            manifest.get("reranker_version") == "reranker_pipeline_v2"
+            and manifest.get("rerank_provider") == "local_rules"
+            and manifest.get("semantic_rerank_model_identifier", "") == "",
+            {
+                "reranker_version": manifest.get("reranker_version"),
+                "runtime_rerank_provider": manifest.get("rerank_provider"),
+                "semantic_model_identifier": manifest.get("semantic_rerank_model_identifier"),
+                "fallback_allowed": manifest.get("semantic_rerank_allow_fallback"),
+            },
+        )
+    )
 
     try:
         from src.api.app import app
@@ -166,6 +180,14 @@ def _env_summary() -> dict[str, str]:
         "RERANK_ENABLED",
         "RERANK_PROVIDER",
         "RERANK_TOP_N",
+        "SEMANTIC_RERANK_MODEL_PATH",
+        "SEMANTIC_RERANK_DEVICE",
+        "SEMANTIC_RERANK_BATCH_SIZE",
+        "SEMANTIC_RERANK_MAX_CANDIDATES",
+        "SEMANTIC_RERANK_ALLOW_FALLBACK",
+        "SEMANTIC_RERANK_WEIGHT",
+        "RULE_RERANK_WEIGHT",
+        "RETRIEVAL_RERANK_WEIGHT",
         "ANSWER_VERIFIER_ENABLED",
         "ANSWER_GUARD_MODE",
         "ANSWER_VERIFIER_STRICT",

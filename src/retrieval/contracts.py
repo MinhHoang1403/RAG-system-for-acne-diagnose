@@ -145,6 +145,9 @@ class RerankScoreBreakdown(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     base_score: float | None = None
+    semantic_score: float | None = None
+    rule_score: float | None = None
+    retrieval_score: float | None = None
     lexical_score: float = 0.0
     entity_match_score: float = 0.0
     metadata_match_score: float = 0.0
@@ -176,6 +179,9 @@ class RerankTrace(BaseModel):
     ranked_candidates: list[RerankedCandidate] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     timings_ms: dict[str, float] = Field(default_factory=dict)
+    requested_provider: str | None = None
+    fallback_used: bool = False
+    semantic_model_available: bool = False
 
 
 class RetrievalTrace(BaseModel):
