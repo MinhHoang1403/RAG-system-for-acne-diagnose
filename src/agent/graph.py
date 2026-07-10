@@ -22,6 +22,11 @@ from src.agent.nodes.reason import (
     generate_answer_node
 )
 from src.agent.nodes.respond import finalize_response_node
+from src.agent.nodes.fallback import (
+    fallback_decision_node,
+    generation_fallback_decision_node,
+    safe_fallback_node,
+)
 from src.agent.nodes.quality import answer_quality_node
 from src.agent.nodes.guardrails import domain_guard_node
 from src.agent.nodes.cache import cache_lookup_node, cache_store_node
@@ -49,6 +54,20 @@ def route_after_cache(state: ClinicalState):
         return "finalize"
     return "extract"
 
+
+def route_after_fallback_decision(state: ClinicalState):
+    """Route to deterministic fallback when evidence or generation is unusable."""
+    if state.get("fallback_applied"):
+        return "safe_fallback"
+    return "safety"
+
+
+def route_after_generation_fallback_decision(state: ClinicalState):
+    """Route post-generation validation to fallback or finalization."""
+    if state.get("fallback_applied"):
+        return "safe_fallback"
+    return "finalize"
+
 def build_clinical_graph():
     """Builds and compiles the StateGraph for the clinical agent."""
     
@@ -63,8 +82,11 @@ def build_clinical_graph():
     builder.add_node("cache_lookup", cache_lookup_node)
     builder.add_node("extract", extract_symptoms_node)
     builder.add_node("retrieve", retrieve_context_node)
+    builder.add_node("fallback_decision", fallback_decision_node)
     builder.add_node("safety", safety_check_node)
     builder.add_node("generate", generate_answer_node)
+    builder.add_node("generation_fallback_decision", generation_fallback_decision_node)
+    builder.add_node("safe_fallback", safe_fallback_node)
     builder.add_node("cache_store", cache_store_node)
     builder.add_node("finalize", finalize_response_node)
     builder.add_node("answer_quality", answer_quality_node)
@@ -83,9 +105,15 @@ def build_clinical_graph():
     builder.add_conditional_edges("cache_lookup", route_after_cache)
     
     builder.add_edge("extract", "retrieve")
-    builder.add_edge("retrieve", "safety")
+    builder.add_edge("retrieve", "fallback_decision")
+    builder.add_conditional_edges("fallback_decision", route_after_fallback_decision)
     builder.add_edge("safety", "generate")
-    builder.add_edge("generate", "finalize")
+    builder.add_edge("generate", "generation_fallback_decision")
+    builder.add_conditional_edges(
+        "generation_fallback_decision",
+        route_after_generation_fallback_decision,
+    )
+    builder.add_edge("safe_fallback", "finalize")
     builder.add_edge("finalize", "answer_quality")
     builder.add_edge("answer_quality", "cache_store")
     builder.add_edge("cache_store", "observability_export")
@@ -147,6 +175,8 @@ async def run_clinical_agent(
         "vector_contexts": [],
         "graph_facts": [],
         "sources": [],
+        "retrieval_status": "not_started",
+        "retrieval_error": None,
         "retrieval_trace": None,
         "packed_context": None,
         "pipeline_manifest": pipeline_manifest,
@@ -169,6 +199,11 @@ async def run_clinical_agent(
         "severity_guard": None,
         "severity_guard_modified": None,
         "severity_guard_cache_eligible": None,
+        "fallback_applied": False,
+        "fallback_type": "none",
+        "fallback_reason": None,
+        "fallback_answer": None,
+        "fallback_cache_eligible": True,
         "errors": [],
         "cache_enabled": None,
         "cache_checked": None,
@@ -211,6 +246,8 @@ async def run_clinical_agent(
         "safety_flags": final_state.get("safety_flags", []),
         "sources": final_state.get("sources", []),
         "graph_facts": final_state.get("graph_facts", []),
+        "retrieval_status": final_state.get("retrieval_status"),
+        "retrieval_error": final_state.get("retrieval_error"),
         "retrieval_trace": final_state.get("retrieval_trace"),
         "packed_context": final_state.get("packed_context"),
         "pipeline_manifest": final_state.get("pipeline_manifest"),
@@ -224,6 +261,10 @@ async def run_clinical_agent(
         "severity_guard": final_state.get("severity_guard"),
         "severity_guard_modified": final_state.get("severity_guard_modified"),
         "severity_guard_cache_eligible": final_state.get("severity_guard_cache_eligible"),
+        "fallback_applied": final_state.get("fallback_applied"),
+        "fallback_type": final_state.get("fallback_type"),
+        "fallback_reason": final_state.get("fallback_reason"),
+        "fallback_cache_eligible": final_state.get("fallback_cache_eligible"),
         "errors": final_state.get("errors", []),
         "is_in_domain": final_state.get("is_in_domain"),
         "guardrail": final_state.get("guardrail"),

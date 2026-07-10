@@ -35,6 +35,8 @@ class ClinicalState(TypedDict):
     vector_contexts: list[dict[str, Any]]
     graph_facts: list[dict[str, Any]]
     sources: list[str]
+    retrieval_status: str | None
+    retrieval_error: str | None
     retrieval_trace: dict[str, Any] | None
     packed_context: dict[str, Any] | None
     pipeline_manifest: dict[str, Any] | None
@@ -55,6 +57,11 @@ class ClinicalState(TypedDict):
     severity_guard: dict[str, Any] | None
     severity_guard_modified: bool | None
     severity_guard_cache_eligible: bool | None
+    fallback_applied: bool
+    fallback_type: str | None
+    fallback_reason: str | None
+    fallback_answer: str | None
+    fallback_cache_eligible: bool | None
     
     # Error handling
     errors: list[str]
