@@ -46,6 +46,15 @@ async def domain_guard_node(state: ClinicalState) -> dict:
     
     logger.info("Running domain guardrail...")
 
+    if not query_lower.strip():
+        return {
+            "is_in_domain": True,
+            "guardrail": "empty_query",
+            "ignored_out_of_domain_part": False,
+            "domain_reason": "Empty query routed to safe fallback.",
+            "refusal_message": None,
+        }
+
     prompt_injection_markers = [
         "bỏ qua hướng dẫn",
         "ignore previous",

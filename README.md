@@ -55,6 +55,7 @@ Checkpoint ổn định:
 | Phase 2D | Đã triển khai và xác minh | Answer Quality Verifier, Vietnamese negation/proposition hardening và answer guard dựa trên quy tắc | `scripts/eval_phase2_answer_quality.py`, `scripts/smoke_phase2_runtime.py --mode offline` |
 | Phase 2E | Đã triển khai và xác minh | Cache versioning, pipeline fingerprint, observability đã sanitize, debug report | `scripts/inspect_cache_versions.py`, `scripts/generate_phase2_debug_report.py` |
 | Phase 2F | Đã triển khai và xác minh | Severity-aware answer guard phân loại `routine`, `caution`, `urgent`, `emergency` để định tuyến cảnh báo an toàn y khoa | `scripts/eval_severity_aware_guard.py` |
+| Phase 2G | Đã triển khai và xác minh | Deterministic safe fallback khi query rỗng, thiếu evidence, retrieval lỗi recoverable hoặc model trả output rỗng/invalid; fallback không cache và vẫn đi qua severity guard | `scripts/eval_safe_fallback_flow.py` |
 | Pre-UI audit | Đã triển khai và xác minh | Import API, OpenAPI routes, health checks, frontend API contract | `scripts/pre_ui_runtime_check.py` |
 
 ## Khả năng chính
@@ -340,6 +341,7 @@ bạn muốn chạy. Không commit `.env`.
 | Answer guard | `ANSWER_GUARD_MODE` | `metadata_only` |
 | Answer guard | `ANSWER_VERIFIER_STRICT` | `false` |
 | Answer guard | `SEVERITY_GUARD_VERSION` | `severity_aware_answer_guard_v1` |
+| Safe fallback | `SAFE_FALLBACK_FLOW_VERSION` | `safe_fallback_flow_v1` |
 | Cache | `CACHE_ENABLED` | `true` |
 | Cache | `CACHE_TTL_SECONDS` | `86400` |
 | Cache | `CACHE_ANSWER_VERSION` | `v5` |
@@ -467,8 +469,11 @@ Aggregate suite này chạy:
 - `scripts/eval_semantic_reranker.py --mode offline`
 - `scripts/eval_phase2_answer_quality.py`
 - `scripts/eval_severity_aware_guard.py`
+- `scripts/eval_safe_fallback_flow.py`
 - `scripts/smoke_phase2_runtime.py --mode offline`
 - `scripts/inspect_cache_versions.py`
+
+Safe fallback flow dùng câu trả lời tiếng Việt deterministic khi hệ thống không có evidence usable hoặc output generation rỗng/invalid. Fallback không giả vờ có nguồn, không thay thế chẩn đoán, không được lưu answer cache, và không biến timeout/provider outage thành HTTP 200; các lỗi hạ tầng vẫn dùng structured `503/504`. Severity-aware guard vẫn có quyền ưu tiên cao hơn generic fallback. `CACHE_ANSWER_VERSION` vẫn là `v5`; pipeline fingerprint đổi do `SAFE_FALLBACK_FLOW_VERSION`.
 
 Các lệnh kiểm tra riêng:
 

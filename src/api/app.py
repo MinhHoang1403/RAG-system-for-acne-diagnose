@@ -160,6 +160,10 @@ class ChatMetadata(BaseModel):
     domain_reason: Optional[str] = None
     llm_fallback: Optional[bool] = None
     fallback_reason: Optional[str] = None
+    retrieval_status: Optional[str] = None
+    fallback_applied: Optional[bool] = None
+    fallback_type: Optional[str] = None
+    fallback_cache_eligible: Optional[bool] = None
     cache: Optional[ChatCacheMetadata] = None
     cached_from_provider: Optional[str] = None
     cached_from_model: Optional[str] = None
@@ -550,7 +554,7 @@ async def chat_endpoint(request: ChatRequest):
             
         is_in_domain = result.get("is_in_domain")
         used_retrieval = is_in_domain is True
-        retrieval_status = "hybrid_qdrant_neo4j" if used_retrieval else "skipped"
+        retrieval_status = result.get("retrieval_status") or ("hybrid_qdrant_neo4j" if used_retrieval else "skipped")
         
         answer_text = repair_mojibake(result.get("answer", ""))
         sources_list = result.get("sources", [])
@@ -612,6 +616,13 @@ async def chat_endpoint(request: ChatRequest):
                 ),
                 "guard_modified": result.get("answer_guard_modified"),
                 "guard_mode": result.get("answer_guard_mode"),
+            },
+            "safe_fallback": {
+                "retrieval_status": result.get("retrieval_status"),
+                "fallback_applied": bool(result.get("fallback_applied")),
+                "fallback_type": result.get("fallback_type"),
+                "fallback_reason": result.get("fallback_reason"),
+                "fallback_cache_eligible": result.get("fallback_cache_eligible"),
             },
             "cache": {
                 "enabled": bool(result.get("cache_enabled", os.getenv("CACHE_ENABLED", "true").lower() == "true")),
@@ -676,6 +687,10 @@ async def chat_endpoint(request: ChatRequest):
                 domain_reason=result.get("domain_reason"),
                 llm_fallback=result.get("llm_fallback"),
                 fallback_reason=result.get("fallback_reason"),
+                retrieval_status=result.get("retrieval_status"),
+                fallback_applied=result.get("fallback_applied"),
+                fallback_type=result.get("fallback_type"),
+                fallback_cache_eligible=result.get("fallback_cache_eligible"),
                 cache=ChatCacheMetadata(
                     enabled=bool(result.get("cache_enabled", os.getenv("CACHE_ENABLED", "true").lower() == "true")),
                     checked=bool(result.get("cache_checked")),

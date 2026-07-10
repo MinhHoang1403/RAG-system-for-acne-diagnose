@@ -232,6 +232,18 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
             state.get("severity_guard_cache_eligible"),
         )
         return {}
+
+    fallback_type = state.get("fallback_type")
+    retrieval_status = state.get("retrieval_status")
+    if (
+        state.get("fallback_applied")
+        or (fallback_type and fallback_type != "none")
+        or state.get("fallback_cache_eligible") is False
+        or retrieval_status in {"empty_query", "no_evidence", "recoverable_error"}
+    ):
+        reason = f"safe_fallback_{fallback_type or retrieval_status or 'unknown'}"
+        logger.info("Cache store SKIPPED: %s", reason)
+        return {"cache_reason": reason}
         
     if not state.get("is_in_domain"):
         logger.info("Cache store SKIPPED: not in domain")
@@ -393,6 +405,11 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
         "medical_severity": state.get("medical_severity") or "routine",
         "severity_guard": state.get("severity_guard") or {},
         "severity_guard_modified": bool(state.get("severity_guard_modified")),
+        "retrieval_status": state.get("retrieval_status"),
+        "fallback_applied": bool(state.get("fallback_applied")),
+        "fallback_type": state.get("fallback_type") or "none",
+        "fallback_reason": state.get("fallback_reason"),
+        "fallback_cache_eligible": state.get("fallback_cache_eligible"),
         "answer_version": answer_cache_version,
         "answer_cache_version": answer_cache_version,
         "pipeline_fingerprint": pipeline_fingerprint,

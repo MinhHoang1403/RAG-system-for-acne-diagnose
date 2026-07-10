@@ -117,6 +117,20 @@ def build_observability_event(
         metadata={
             "answer_guard_modified": result.get("answer_guard_modified", state.get("answer_guard_modified")),
             "answer_guard_mode": result.get("answer_guard_mode", state.get("answer_guard_mode")),
+            "retrieval_status": result.get("retrieval_status", state.get("retrieval_status")),
+            "fallback_applied": result.get("fallback_applied", state.get("fallback_applied")),
+            "fallback_type": result.get("fallback_type", state.get("fallback_type")),
+            "fallback_reason": result.get("fallback_reason", state.get("fallback_reason")),
+            "fallback_cache_eligible": result.get(
+                "fallback_cache_eligible",
+                state.get("fallback_cache_eligible"),
+            ),
+            "medical_severity": result.get("medical_severity", state.get("medical_severity")),
+            "severity_guard_modified": result.get(
+                "severity_guard_modified",
+                state.get("severity_guard_modified"),
+            ),
+            "cache_reason": result.get("cache_reason", state.get("cache_reason")),
             "pipeline_manifest": pipeline_manifest_summary(pipeline_manifest),
             "runtime_resilience": sanitize_for_observability(
                 result.get("runtime_resilience", state.get("runtime_resilience"))
@@ -127,6 +141,11 @@ def build_observability_event(
     payload = safe_payload or {
         "sources": result.get("sources", state.get("sources", [])),
         "cache_reason": result.get("cache_reason", state.get("cache_reason")),
+        "retrieval_status": result.get("retrieval_status", state.get("retrieval_status")),
+        "fallback_applied": result.get("fallback_applied", state.get("fallback_applied")),
+        "fallback_type": result.get("fallback_type", state.get("fallback_type")),
+        "fallback_reason": result.get("fallback_reason", state.get("fallback_reason")),
+        "fallback_cache_eligible": result.get("fallback_cache_eligible", state.get("fallback_cache_eligible")),
         "quality_issues": issues,
     }
 

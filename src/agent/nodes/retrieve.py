@@ -13,7 +13,8 @@ from src.agent.state import ClinicalState
 from src.database.retriever import HybridRetriever
 from src.resilience.budget import DeadlineBudget
 from src.resilience.contracts import RuntimeResilienceSettings, runtime_resilience_settings_from_env
-from src.resilience.exceptions import StageTimeoutError
+from src.resilience.exceptions import RuntimeResilienceError, StageTimeoutError
+from src.quality.safe_fallback import has_usable_evidence, sanitize_fallback_reason
 
 logger = logging.getLogger(__name__)
 
@@ -171,12 +172,13 @@ async def retrieve_context_node(state: ClinicalState) -> dict:
     """Retrieve context using the HybridRetriever."""
     query = state.get("standalone_question") or state.get("normalized_question", "")
     
-    if not query:
+    if not query or not str(query).strip():
         return {
             "vector_contexts": [],
             "graph_facts": [],
             "sources": [],
-            "errors": state.get("errors", []) + ["Empty query for retrieval."]
+            "retrieval_status": "empty_query",
+            "retrieval_error": None,
         }
         
     logger.info(f"Retrieving context for query: {query}")
@@ -190,12 +192,17 @@ async def retrieve_context_node(state: ClinicalState) -> dict:
             raise StageTimeoutError("No remaining deadline budget for retrieval.")
         async with asyncio.timeout(timeout_seconds):
             result = await retriever.retrieve(query, top_k=5)
-        return {
+        payload = {
             "vector_contexts": result.vector_contexts,
             "graph_facts": result.graph_facts,
             "sources": result.sources,
             "retrieval_trace": result.metadata.get("retrieval_trace"),
             "packed_context": result.metadata.get("packed_context"),
+            "retrieval_error": None,
+        }
+        payload["retrieval_status"] = "success" if has_usable_evidence(payload) else "no_evidence"
+        return {
+            **payload,
         }
     except asyncio.CancelledError:
         raise
@@ -203,10 +210,20 @@ async def retrieve_context_node(state: ClinicalState) -> dict:
         raise StageTimeoutError(f"Retrieval exceeded timeout of {timeout_seconds:.1f}s.") from exc
     except StageTimeoutError:
         raise
+    except RuntimeResilienceError:
+        raise
     except Exception as e:
-        logger.error(f"Retrieval error: {e}")
+        safe_error = sanitize_fallback_reason(e)
+        logger.error("Recoverable retrieval error: %s", safe_error)
         return {
-            "errors": state.get("errors", []) + [f"Retrieval failed: {str(e)}"]
+            "vector_contexts": [],
+            "graph_facts": [],
+            "sources": [],
+            "retrieval_trace": None,
+            "packed_context": None,
+            "retrieval_status": "recoverable_error",
+            "retrieval_error": safe_error,
+            "errors": state.get("errors", []) + [f"Retrieval failed: {safe_error}"],
         }
     finally:
         await retriever.close()
