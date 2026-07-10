@@ -25,6 +25,7 @@ from src.agent.nodes.respond import finalize_response_node
 from src.agent.nodes.quality import answer_quality_node
 from src.agent.nodes.guardrails import domain_guard_node
 from src.agent.nodes.cache import cache_lookup_node, cache_store_node
+from src.agent.nodes.severity import severity_classification_node
 from src.agent.nodes.observability import observability_export_node
 from src.observability.versioning import (
     build_pipeline_version_manifest,
@@ -57,6 +58,7 @@ def build_clinical_graph():
     # Add all nodes
     builder.add_node("normalize", normalize_question_node)
     builder.add_node("rewrite", rewrite_question_node)
+    builder.add_node("severity", severity_classification_node)
     builder.add_node("guard", domain_guard_node)
     builder.add_node("cache_lookup", cache_lookup_node)
     builder.add_node("extract", extract_symptoms_node)
@@ -71,7 +73,8 @@ def build_clinical_graph():
     # Define the edges (the flow)
     builder.add_edge(START, "normalize")
     builder.add_edge("normalize", "rewrite")
-    builder.add_edge("rewrite", "guard")
+    builder.add_edge("rewrite", "severity")
+    builder.add_edge("severity", "guard")
     
     # Conditional routing after guard
     builder.add_conditional_edges("guard", route_after_guard)
@@ -162,6 +165,10 @@ async def run_clinical_agent(
         "answer_quality_report": None,
         "answer_guard_modified": None,
         "answer_guard_mode": None,
+        "medical_severity": None,
+        "severity_guard": None,
+        "severity_guard_modified": None,
+        "severity_guard_cache_eligible": None,
         "errors": [],
         "cache_enabled": None,
         "cache_checked": None,
@@ -213,6 +220,10 @@ async def run_clinical_agent(
         "answer_quality_report": final_state.get("answer_quality_report"),
         "answer_guard_modified": final_state.get("answer_guard_modified"),
         "answer_guard_mode": final_state.get("answer_guard_mode"),
+        "medical_severity": final_state.get("medical_severity"),
+        "severity_guard": final_state.get("severity_guard"),
+        "severity_guard_modified": final_state.get("severity_guard_modified"),
+        "severity_guard_cache_eligible": final_state.get("severity_guard_cache_eligible"),
         "errors": final_state.get("errors", []),
         "is_in_domain": final_state.get("is_in_domain"),
         "guardrail": final_state.get("guardrail"),

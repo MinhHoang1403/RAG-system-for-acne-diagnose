@@ -6,7 +6,9 @@ from src.agent.nodes import cache as cache_node
 from src.observability.versioning import (
     build_pipeline_version_manifest,
     compute_pipeline_fingerprint,
+    current_pipeline_fingerprint,
     get_answer_cache_version,
+    pipeline_manifest_summary,
 )
 
 
@@ -46,6 +48,24 @@ def test_answer_verifier_version_is_in_manifest_and_changes_fingerprint():
     assert compute_pipeline_fingerprint(old_manifest) != compute_pipeline_fingerprint(new_manifest)
 
 
+def test_severity_guard_version_is_in_manifest_and_changes_fingerprint():
+    old_manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "SEVERITY_GUARD_VERSION": "severity_aware_answer_guard_v0",
+        }
+    )
+    new_manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "SEVERITY_GUARD_VERSION": "severity_aware_answer_guard_v1",
+        }
+    )
+
+    assert new_manifest["severity_guard_version"] == "severity_aware_answer_guard_v1"
+    assert compute_pipeline_fingerprint(old_manifest) != compute_pipeline_fingerprint(new_manifest)
+
+
 def test_pipeline_manifest_does_not_include_secret_keys():
     manifest = build_pipeline_version_manifest(
         {
@@ -58,6 +78,66 @@ def test_pipeline_manifest_does_not_include_secret_keys():
 
     assert "api_key" not in serialized
     assert "secret" not in serialized
+
+
+def test_manifest_summary_includes_severity_and_runtime_fields():
+    manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "SEVERITY_GUARD_VERSION": "severity_aware_answer_guard_v1",
+            "CHUNK_QDRANT_COLLECTION_NAME": "acne_chunks_v2",
+            "QDRANT_COLLECTION_NAME": "acne_knowledge",
+            "ENTITY_QDRANT_COLLECTION_NAME": "acne_entities_v2",
+            "EMBEDDING_DIMENSIONS": "not-an-int",
+            "RERANK_ENABLED": "off",
+            "RERANK_TOP_N": "bad",
+            "SEMANTIC_RERANK_MODEL_PATH": "C:/Models/acne-reranker/bge-reranker-v2-m3",
+            "SEMANTIC_RERANK_MAX_CANDIDATES": "bad",
+            "SEMANTIC_RERANK_WEIGHT": "bad",
+            "RULE_RERANK_WEIGHT": "0.25",
+            "RETRIEVAL_RERANK_WEIGHT": "bad",
+        }
+    )
+    summary = pipeline_manifest_summary(manifest)
+
+    assert manifest["severity_guard_version"] == "severity_aware_answer_guard_v1"
+    assert manifest["qdrant_collection_name"] == "acne_chunks_v2"
+    assert manifest["entity_collection_name"] == "acne_entities_v2"
+    assert manifest["embedding_dimensions"] == 3072
+    assert manifest["rerank_enabled"] is False
+    assert manifest["rerank_top_n"] == 8
+    assert manifest["semantic_rerank_model_identifier"] == "bge-reranker-v2-m3"
+    assert manifest["semantic_rerank_max_candidates"] == 32
+    assert manifest["semantic_rerank_weight"] == 0.70
+    assert manifest["rule_rerank_weight"] == 0.25
+    assert manifest["retrieval_rerank_weight"] == 0.10
+    assert summary["severity_guard_version"] == manifest["severity_guard_version"]
+
+
+def test_manifest_promotes_legacy_chunk_collection_to_base_collection():
+    manifest = build_pipeline_version_manifest(
+        {
+            "CHUNK_QDRANT_COLLECTION_NAME": "acne_chunks_v1",
+            "QDRANT_COLLECTION_NAME": "acne_knowledge",
+            "ENTITY_QDRANT_COLLECTION_NAME": "",
+            "CACHE_ANSWER_VERSION": "",
+            "RERANK_ENABLED": "maybe",
+        }
+    )
+
+    assert manifest["qdrant_collection_name"] == "acne_knowledge"
+    assert manifest["entity_collection_name"] == "acne_entities_v1"
+    assert manifest["answer_cache_version"] == "v5"
+    assert manifest["rerank_enabled"] is True
+
+
+def test_current_pipeline_fingerprint_uses_environment(monkeypatch):
+    monkeypatch.setenv("CACHE_ANSWER_VERSION", "v5")
+    monkeypatch.setenv("SEVERITY_GUARD_VERSION", "severity_aware_answer_guard_test")
+
+    assert current_pipeline_fingerprint() == compute_pipeline_fingerprint(
+        build_pipeline_version_manifest()
+    )
 
 
 def test_legacy_answer_cache_version_is_promoted_to_phase2e_default():

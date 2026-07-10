@@ -206,7 +206,9 @@ def inspect_runtime_code() -> dict[str, Any]:
     resilience_circuit_path = PROJECT_ROOT / "src" / "resilience" / "circuit_breaker.py"
     resilience_retry_path = PROJECT_ROOT / "src" / "resilience" / "retry.py"
     answer_verifier_path = PROJECT_ROOT / "src" / "quality" / "answer_verifier.py"
+    severity_guard_path = PROJECT_ROOT / "src" / "quality" / "severity_guard.py"
     answer_quality_eval_path = PROJECT_ROOT / "scripts" / "eval_phase2_answer_quality.py"
+    severity_guard_eval_path = PROJECT_ROOT / "scripts" / "eval_severity_aware_guard.py"
     runtime_smoke_path = PROJECT_ROOT / "scripts" / "smoke_phase2_runtime.py"
     cache_versioning_path = PROJECT_ROOT / "src" / "observability" / "versioning.py"
     observability_exporter_path = PROJECT_ROOT / "src" / "observability" / "trace_exporter.py"
@@ -220,6 +222,7 @@ def inspect_runtime_code() -> dict[str, Any]:
     all_eval_path = PROJECT_ROOT / "scripts" / "eval_phase2_all.py"
     cache_inspect_path = PROJECT_ROOT / "scripts" / "inspect_cache_versions.py"
     answer_verifier_source = answer_verifier_path.read_text(encoding="utf-8") if answer_verifier_path.exists() else ""
+    severity_guard_source = severity_guard_path.read_text(encoding="utf-8") if severity_guard_path.exists() else ""
     runtime_smoke_source = runtime_smoke_path.read_text(encoding="utf-8") if runtime_smoke_path.exists() else ""
     cache_versioning_source = cache_versioning_path.read_text(encoding="utf-8") if cache_versioning_path.exists() else ""
     observability_exporter_source = observability_exporter_path.read_text(encoding="utf-8") if observability_exporter_path.exists() else ""
@@ -285,6 +288,10 @@ def inspect_runtime_code() -> dict[str, Any]:
             "taxonomy_versioned": "taxonomy_version" in cache_versioning_source,
             "answer_guard_integrated": "answer_quality" in agent_graph_source
             and "cache_store" in agent_graph_source,
+            "severity_aware_answer_guard_available": "def classify_medical_severity" in severity_guard_source
+            and "def apply_severity_aware_answer_guard" in severity_guard_source
+            and "severity_aware_answer_guard_v1" in cache_versioning_source,
+            "severity_guard_eval_available": severity_guard_eval_path.exists(),
             "answer_quality_eval_available": answer_quality_eval_path.exists(),
             "runtime_smoke_available": runtime_smoke_path.exists(),
             "offline_smoke_available": "def run_offline_smoke" in runtime_smoke_source

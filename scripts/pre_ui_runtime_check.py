@@ -194,6 +194,7 @@ def _env_summary() -> dict[str, str]:
         "ANSWER_VERIFIER_ENABLED",
         "ANSWER_GUARD_MODE",
         "ANSWER_VERIFIER_STRICT",
+        "SEVERITY_GUARD_VERSION",
         "TAXONOMY_VERSION",
         "RUNTIME_RESILIENCE_VERSION",
         "AGENT_TOTAL_TIMEOUT_SECONDS",
