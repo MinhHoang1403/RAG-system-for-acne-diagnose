@@ -8,6 +8,7 @@ from typing import Any
 
 from src.agent.state import ClinicalState
 from src.quality.answer_verifier import apply_answer_guard
+from src.quality.severity_guard import apply_severity_aware_answer_guard
 from src.retrieval.contracts import PackedContext, RetrievalTrace
 from src.retrieval.query_normalization import normalize_query
 
@@ -56,17 +57,44 @@ async def answer_quality_node(state: ClinicalState) -> dict[str, Any]:
             retrieval_trace=retrieval_trace,
             mode=guard_mode,
         )
+        severity_guard = apply_severity_aware_answer_guard(query=query, answer=guard.answer)
+        report_data = guard.report.model_dump(mode="json")
+        severity_data = severity_guard.classification.model_dump(mode="json")
+        report_data.setdefault("metadata", {})
+        report_data["metadata"]["severity_guard"] = {
+            **severity_data,
+            "version": "severity_aware_answer_guard_v1",
+            "modified": severity_guard.modified,
+            "modification_reason": severity_guard.modification_reason,
+            "cache_eligible": severity_guard.cache_eligible,
+        }
+        if severity_guard.modified:
+            report_data.setdefault("issues", []).append(
+                {
+                    "code": severity_guard.modification_reason or "severity_guard_modified_answer",
+                    "severity": "warning",
+                    "message": "Severity-aware answer guard adjusted the response for medical safety.",
+                    "evidence": severity_data,
+                    "suggested_fix": None,
+                }
+            )
         logger.info(
-            "Answer quality checked: passed=%s issues=%d modified=%s",
+            "Answer quality checked: passed=%s issues=%d modified=%s severity=%s severity_modified=%s",
             guard.report.passed,
             len(guard.report.issues),
             guard.modified,
+            severity_guard.classification.severity,
+            severity_guard.modified,
         )
         return {
-            "final_answer": guard.answer,
-            "answer_quality_report": guard.report.model_dump(mode="json"),
-            "answer_guard_modified": guard.modified,
+            "final_answer": severity_guard.answer,
+            "answer_quality_report": report_data,
+            "answer_guard_modified": guard.modified or severity_guard.modified,
             "answer_guard_mode": guard_mode,
+            "medical_severity": severity_guard.classification.severity,
+            "severity_guard": severity_data,
+            "severity_guard_modified": severity_guard.modified,
+            "severity_guard_cache_eligible": severity_guard.cache_eligible,
         }
     except Exception as exc:
         logger.warning("Answer quality verifier failed safely: %s", exc)

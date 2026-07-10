@@ -54,6 +54,7 @@ Checkpoint ổn định:
 | Phase 2C | Đã triển khai và xác minh | Deterministic local reranker với `RERANK_PROVIDER=local_rules` | `scripts/eval_phase2_reranking.py` |
 | Phase 2D | Đã triển khai và xác minh | Answer Quality Verifier, Vietnamese negation/proposition hardening và answer guard dựa trên quy tắc | `scripts/eval_phase2_answer_quality.py`, `scripts/smoke_phase2_runtime.py --mode offline` |
 | Phase 2E | Đã triển khai và xác minh | Cache versioning, pipeline fingerprint, observability đã sanitize, debug report | `scripts/inspect_cache_versions.py`, `scripts/generate_phase2_debug_report.py` |
+| Phase 2F | Đã triển khai và xác minh | Severity-aware answer guard phân loại `routine`, `caution`, `urgent`, `emergency` để định tuyến cảnh báo an toàn y khoa | `scripts/eval_severity_aware_guard.py` |
 | Pre-UI audit | Đã triển khai và xác minh | Import API, OpenAPI routes, health checks, frontend API contract | `scripts/pre_ui_runtime_check.py` |
 
 ## Khả năng chính
@@ -74,6 +75,10 @@ Checkpoint ổn định:
 - Answer Quality Verifier dựa trên quy tắc để phát hiện một số mâu thuẫn thường
   gặp trong miền trị mụn và an toàn thuốc, gồm hardening cho phủ định tiếng
   Việt như `không phải là kháng sinh`.
+- Severity-aware answer guard phân loại câu hỏi theo `routine`, `caution`,
+  `urgent`, `emergency`; với urgent/emergency hệ thống ưu tiên khuyến nghị khám
+  sớm/cấp cứu thay vì trả lời như routine skincare. Lớp này là safety routing
+  dựa trên quy tắc, không phải chẩn đoán y khoa.
 - Redis semantic cache được cô lập bằng answer version và pipeline fingerprint.
 - Runtime resilience cho Phase 2: total agent timeout, provider timeout,
   retry ngắn cho lỗi transient và circuit breaker in-memory cho provider lỗi lặp.
@@ -334,6 +339,7 @@ bạn muốn chạy. Không commit `.env`.
 | Answer guard | `ANSWER_VERIFIER_ENABLED` | `true` |
 | Answer guard | `ANSWER_GUARD_MODE` | `metadata_only` |
 | Answer guard | `ANSWER_VERIFIER_STRICT` | `false` |
+| Answer guard | `SEVERITY_GUARD_VERSION` | `severity_aware_answer_guard_v1` |
 | Cache | `CACHE_ENABLED` | `true` |
 | Cache | `CACHE_TTL_SECONDS` | `86400` |
 | Cache | `CACHE_ANSWER_VERSION` | `v5` |
@@ -460,6 +466,7 @@ Aggregate suite này chạy:
 - `scripts/eval_phase2_reranking.py`
 - `scripts/eval_semantic_reranker.py --mode offline`
 - `scripts/eval_phase2_answer_quality.py`
+- `scripts/eval_severity_aware_guard.py`
 - `scripts/smoke_phase2_runtime.py --mode offline`
 - `scripts/inspect_cache_versions.py`
 
@@ -515,6 +522,8 @@ Answer cache key bao gồm:
 - cache schema version, default `v3`;
 - answer cache version, hiện là `v5`;
 - pipeline fingerprint, hiện bao gồm `answer_verifier_v2`;
+- severity-aware answer guard marker, mặc định
+  `severity_aware_answer_guard_v1`;
 - normalized question;
 - intent;
 - provider/model;

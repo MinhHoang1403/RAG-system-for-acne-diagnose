@@ -51,6 +51,10 @@ class ClinicalState(TypedDict):
     answer_quality_report: dict[str, Any] | None
     answer_guard_modified: bool | None
     answer_guard_mode: str | None
+    medical_severity: str | None
+    severity_guard: dict[str, Any] | None
+    severity_guard_modified: bool | None
+    severity_guard_cache_eligible: bool | None
     
     # Error handling
     errors: list[str]

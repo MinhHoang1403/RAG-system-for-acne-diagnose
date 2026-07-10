@@ -91,6 +91,17 @@ async def cache_lookup_node(state: ClinicalState) -> dict[str, Any]:
             "cache_intent": intent,
         }
 
+    severity = (state.get("medical_severity") or "routine").lower()
+    if severity in {"urgent", "emergency"}:
+        logger.info("Cache SKIPPED: medical_severity=%s", severity)
+        return {
+            "cache_checked": True,
+            "cache_hit": False,
+            "cache_reason": f"severity_{severity}",
+            "normalized_question": normalized,
+            "cache_intent": intent,
+        }
+
     if history:
         logger.info("Cache SKIPPED: conversation history present.")
         return {
@@ -207,6 +218,19 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
     # Check if it was deemed cacheable in the lookup phase
     if state.get("cache_reason") not in ["miss", None]:
         logger.info(f"Cache store SKIPPED: cache_reason={state.get('cache_reason')}")
+        return {}
+
+    severity = (state.get("medical_severity") or "routine").lower()
+    if severity in {"urgent", "emergency"}:
+        logger.info("Cache store SKIPPED: medical_severity=%s", severity)
+        return {}
+
+    if state.get("severity_guard_modified") or state.get("severity_guard_cache_eligible") is False:
+        logger.info(
+            "Cache store SKIPPED: severity guard modified=%s cache_eligible=%s",
+            state.get("severity_guard_modified"),
+            state.get("severity_guard_cache_eligible"),
+        )
         return {}
         
     if not state.get("is_in_domain"):
@@ -366,6 +390,9 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
                 if isinstance(issue, dict) and issue.get("severity") == "critical"
             ),
         },
+        "medical_severity": state.get("medical_severity") or "routine",
+        "severity_guard": state.get("severity_guard") or {},
+        "severity_guard_modified": bool(state.get("severity_guard_modified")),
         "answer_version": answer_cache_version,
         "answer_cache_version": answer_cache_version,
         "pipeline_fingerprint": pipeline_fingerprint,
