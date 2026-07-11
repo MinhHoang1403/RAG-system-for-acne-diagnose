@@ -24,6 +24,7 @@ REQUIRED_ENV_EXAMPLE_KEYS = {
     "RUNTIME_RESILIENCE_VERSION": "runtime_resilience_v1",
     "CACHE_ANSWER_VERSION": "v5",
     "REPRODUCIBLE_ENVIRONMENT_VERSION": "reproducible_environment_v1",
+    "END_TO_END_RELEASE_READINESS_VERSION": "end_to_end_release_readiness_v1",
 }
 
 IMPORTANT_LOCK_PACKAGES = {

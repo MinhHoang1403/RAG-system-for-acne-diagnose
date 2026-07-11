@@ -1,5 +1,27 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
+export async function parseApiError(response, fallbackPrefix = 'Lỗi server') {
+  let detail;
+  try {
+    const data = await response.clone().json();
+    detail = data?.detail || data;
+  } catch {
+    detail = null;
+  }
+
+  const message = typeof detail === 'object' && detail?.message
+    ? detail.message
+    : `${fallbackPrefix}: ${response.status}`;
+  const error = new Error(message);
+  error.status = response.status;
+  if (typeof detail === 'object' && detail) {
+    error.code = detail.code;
+    error.retryable = detail.retryable;
+    error.errorType = detail.error_type;
+  }
+  return error;
+}
+
 function normalizeListResponse(data) {
   if (Array.isArray(data)) return data;
   if (data && Array.isArray(data.value)) return data.value;
@@ -40,7 +62,7 @@ export async function sendChatMessage({
   });
 
   if (!response.ok) {
-    throw new Error(`Lỗi server: ${response.status}`);
+    throw await parseApiError(response);
   }
 
   return response.json();
@@ -68,7 +90,7 @@ export async function checkBackendHealth() {
  */
 export async function fetchModels() {
   const response = await fetch(`${API_BASE_URL}/models`);
-  if (!response.ok) throw new Error(`Lỗi server: ${response.status}`);
+  if (!response.ok) throw await parseApiError(response);
   return response.json();
 }
 
@@ -84,7 +106,7 @@ export async function fetchSessions(userId = null, includeHidden = false) {
   if (includeHidden) params.set('include_hidden', 'true');
 
   const response = await fetch(`${API_BASE_URL}/chat/sessions?${params.toString()}`);
-  if (!response.ok) throw new Error(`Lỗi server: ${response.status}`);
+  if (!response.ok) throw await parseApiError(response);
   const data = await response.json();
   return normalizeListResponse(data);
 }
@@ -96,7 +118,7 @@ export async function fetchSessions(userId = null, includeHidden = false) {
  */
 export async function fetchMessages(sessionId) {
   const response = await fetch(`${API_BASE_URL}/chat/sessions/${sessionId}/messages`);
-  if (!response.ok) throw new Error(`Lỗi server: ${response.status}`);
+  if (!response.ok) throw await parseApiError(response);
   const data = await response.json();
   return normalizeListResponse(data);
 }
@@ -113,7 +135,7 @@ export async function renameSession(sessionId, title) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title }),
   });
-  if (!response.ok) throw new Error(`Lỗi server: ${response.status}`);
+  if (!response.ok) throw await parseApiError(response);
   return response.json();
 }
 
@@ -126,7 +148,7 @@ export async function hideSession(sessionId) {
   const response = await fetch(`${API_BASE_URL}/chat/sessions/${sessionId}/hide`, {
     method: 'PATCH',
   });
-  if (!response.ok) throw new Error(`Lỗi server: ${response.status}`);
+  if (!response.ok) throw await parseApiError(response);
   return response.json();
 }
 
@@ -138,7 +160,7 @@ export async function deleteAllChatSessions() {
   const response = await fetch(`${API_BASE_URL}/chat/sessions`, {
     method: 'DELETE',
   });
-  if (!response.ok) throw new Error(`Lỗi server: ${response.status}`);
+  if (!response.ok) throw await parseApiError(response);
   return response.json();
 }
 
@@ -178,6 +200,6 @@ export async function syncSessionsToBackend(sessions) {
     body: JSON.stringify({ sessions: payload }),
   });
 
-  if (!response.ok) throw new Error(`Sync failed: ${response.status}`);
+  if (!response.ok) throw await parseApiError(response, 'Sync failed');
   return response.json();
 }
