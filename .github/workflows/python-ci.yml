@@ -18,6 +18,7 @@ env:
   CACHE_ANSWER_VERSION: v5
   GOOGLE_GENAI_SDK_VERSION: google_genai_sdk_v1
   REPRODUCIBLE_ENVIRONMENT_VERSION: reproducible_environment_v1
+  END_TO_END_RELEASE_READINESS_VERSION: end_to_end_release_readiness_v1
 
 jobs:
   tests:
@@ -52,6 +53,11 @@ jobs:
         run: |
           python scripts/check_reproducible_environment.py
 
+      - name: Release readiness checker
+        shell: pwsh
+        run: |
+          python scripts/check_release_readiness.py --mode offline
+
       - name: Legacy Google SDK scan
         shell: pwsh
         run: |
@@ -75,3 +81,31 @@ jobs:
         shell: pwsh
         run: |
           python -m pytest -q
+
+  frontend:
+    name: Frontend contract and build
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/frontend/package-lock.json
+
+      - name: Clean install frontend dependencies
+        working-directory: src/frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: src/frontend
+        run: npm run build
+
+      - name: Lint frontend
+        working-directory: src/frontend
+        run: npm run lint

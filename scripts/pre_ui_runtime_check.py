@@ -41,6 +41,7 @@ SECRET_MARKERS = (
 URL_CONFIG_KEYS = {"DATABASE_URL", "REDIS_URL"}
 ENV_SUMMARY_DEFAULTS = {
     "REPRODUCIBLE_ENVIRONMENT_VERSION": "reproducible_environment_v1",
+    "END_TO_END_RELEASE_READINESS_VERSION": "end_to_end_release_readiness_v1",
 }
 RERANK_PROVIDERS_WITHOUT_MODEL = {"local_rules"}
 RERANK_PROVIDERS_WITH_MODEL = {"hybrid", "local_semantic", "local_cross_encoder", "semantic", "local_model"}
@@ -100,6 +101,13 @@ async def run_pre_ui_runtime_check() -> dict[str, Any]:
             "reproducible_environment_version",
             manifest.get("reproducible_environment_version") == "reproducible_environment_v1",
             {"reproducible_environment_version": manifest.get("reproducible_environment_version")},
+        )
+    )
+    checks.append(
+        check(
+            "end_to_end_release_readiness_version",
+            manifest.get("end_to_end_release_readiness_version") == "end_to_end_release_readiness_v1",
+            {"end_to_end_release_readiness_version": manifest.get("end_to_end_release_readiness_version")},
         )
     )
     checks.append(
@@ -222,6 +230,7 @@ def _env_summary() -> dict[str, str]:
         "SAFE_FALLBACK_FLOW_VERSION",
         "GOOGLE_GENAI_SDK_VERSION",
         "REPRODUCIBLE_ENVIRONMENT_VERSION",
+        "END_TO_END_RELEASE_READINESS_VERSION",
         "TAXONOMY_VERSION",
         "RUNTIME_RESILIENCE_VERSION",
         "AGENT_TOTAL_TIMEOUT_SECONDS",
