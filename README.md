@@ -191,7 +191,7 @@ Chỉ ghi version khi repository có pin hoặc khai báo rõ.
 | Python runtime | `>=3.11` theo `pyproject.toml` |
 | API | FastAPI, Uvicorn, Pydantic |
 | Agent workflow | LangGraph, LangChain packages |
-| LLM providers | Gemini qua `google-generativeai`, Ollama |
+| LLM providers | Gemini qua `google-genai`, Ollama |
 | Embeddings | Gemini `models/gemini-embedding-2`, 3072 dimensions |
 | Vector database | Qdrant, named vector `dense`, sparse vector `bm25` |
 | Graph database | Neo4j 5 với APOC trong Docker Compose |
@@ -342,6 +342,7 @@ bạn muốn chạy. Không commit `.env`.
 | Answer guard | `ANSWER_VERIFIER_STRICT` | `false` |
 | Answer guard | `SEVERITY_GUARD_VERSION` | `severity_aware_answer_guard_v1` |
 | Safe fallback | `SAFE_FALLBACK_FLOW_VERSION` | `safe_fallback_flow_v1` |
+| Google GenAI SDK | `GOOGLE_GENAI_SDK_VERSION` | `google_genai_sdk_v1` |
 | Cache | `CACHE_ENABLED` | `true` |
 | Cache | `CACHE_TTL_SECONDS` | `86400` |
 | Cache | `CACHE_ANSWER_VERSION` | `v5` |
@@ -706,8 +707,9 @@ Acne Advisor AI chỉ phục vụ mục đích tham khảo và hỗ trợ cung c
 - Neo4j runtime context hiện là 1-hop supplemental context.
 - Neo4j schema validation depends on a reachable local Neo4j instance for
   integration mode; offline mode uses fake snapshots only.
-- Code vẫn import package `google.generativeai` đã deprecated và có thể phát
-  `FutureWarning`; migration sang `google.genai` là việc tương lai.
+- Gemini generation và embedding dùng `google-genai` qua explicit client.
+  Legacy SDK direct dependency đã được loại khỏi runtime; không cần rebuild
+  Qdrant vì embedding model và 3072 dimensions không đổi.
 - Docker Compose có thể báo Qdrant `unhealthy` dù Qdrant API và application
   health vẫn PASS.
 - Ingestion manifest có thể còn lịch sử `partial` entries; validators là nguồn
@@ -766,10 +768,11 @@ PowerShell mở `git log` trong pager và hiện dấu `:`:
 
 - Nhấn `q` để thoát, hoặc dùng `git --no-pager log --oneline`.
 
-Cảnh báo deprecated của Google generative AI:
+Google GenAI SDK:
 
-- Cảnh báo đến từ import `google.generativeai`. Hiện cảnh báo này không chặn
-  runtime và đã được ghi nhận trong roadmap.
+- Runtime dùng `google-genai` cho Gemini generation và embedding.
+- Nếu còn thấy cảnh báo deprecated từ SDK legacy, hãy chạy static scan trong
+  Step 8 hoặc kiểm tra môi trường ảo có còn package cũ được import gián tiếp.
 
 ## Trạng thái đã xác minh
 
@@ -800,7 +803,6 @@ Sau khi đổi code hoặc cấu hình, nên chạy lại:
 
 ## Roadmap
 
-- Migrate từ `google.generativeai` sang `google.genai`.
 - Thêm optional production/local model reranker mà không tự động download model.
 - Thêm web fallback với trust controls.
 - Mở rộng Neo4j graph reasoning vượt ngoài 1-hop supplemental facts hiện tại.

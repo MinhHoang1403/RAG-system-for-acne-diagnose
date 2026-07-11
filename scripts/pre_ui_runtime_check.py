@@ -87,6 +87,13 @@ async def run_pre_ui_runtime_check() -> dict[str, Any]:
     )
     checks.append(
         check(
+            "google_genai_sdk_version",
+            manifest.get("google_genai_sdk_version") == "google_genai_sdk_v1",
+            {"google_genai_sdk_version": manifest.get("google_genai_sdk_version")},
+        )
+    )
+    checks.append(
+        check(
             "env_runtime_core",
             env_summary.get("QDRANT_COLLECTION_NAME") == "acne_knowledge"
             and env_summary.get("CHUNK_QDRANT_COLLECTION_NAME") == "acne_knowledge"
@@ -203,6 +210,7 @@ def _env_summary() -> dict[str, str]:
         "ANSWER_VERIFIER_STRICT",
         "SEVERITY_GUARD_VERSION",
         "SAFE_FALLBACK_FLOW_VERSION",
+        "GOOGLE_GENAI_SDK_VERSION",
         "TAXONOMY_VERSION",
         "RUNTIME_RESILIENCE_VERSION",
         "AGENT_TOTAL_TIMEOUT_SECONDS",

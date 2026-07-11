@@ -7,11 +7,11 @@ Abstraction for LLM providers (Gemini, Ollama) with fallback support.
 import asyncio
 import os
 import logging
-import google.generativeai as genai
 from typing import Optional
 
 from src.agent.llm.ollama_client import generate_ollama_response, list_ollama_models
 from src.agent.text_encoding import repair_mojibake
+from src.integrations.google_genai import generate_text_async, generate_text_sync
 from src.resilience.budget import DeadlineBudget
 from src.resilience.circuit_breaker import CircuitBreaker, InMemoryCircuitStateStore
 from src.resilience.contracts import RuntimeResilienceSettings, runtime_resilience_settings_from_env
@@ -68,40 +68,14 @@ async def _call_gemini(
     temperature: float,
     request_timeout: float | None = None,
 ) -> str:
-    """Helper to call Gemini API."""
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise ValueError("GOOGLE_API_KEY is not set.")
-    genai.configure(api_key=api_key)
-    
-    # In genai, system instructions can be set on the model instantiation in newer SDKs, 
-    # but the prompt template in acne-agent-system already includes everything in `prompt`.
-    # If system_prompt is provided, we just prepend it.
-    final_prompt = prompt
-    if system_prompt:
-        final_prompt = f"{system_prompt}\n\n{prompt}"
-        
-    model = genai.GenerativeModel(model_name)
-    async def _generate() -> str:
-        request_kwargs = {}
-        if request_timeout and request_timeout > 0:
-            request_kwargs["request_options"] = {"timeout": request_timeout}
-        response = await model.generate_content_async(
-            final_prompt,
-            generation_config=genai.GenerationConfig(temperature=temperature),
-            **request_kwargs,
-        )
-        return response.text
-
-    if request_timeout and request_timeout > 0:
-        async with asyncio.timeout(request_timeout):
-            return await _generate()
-
-    response = await model.generate_content_async(
-        final_prompt,
-        generation_config=genai.GenerationConfig(temperature=temperature)
+    """Helper to call Gemini API using the Google GenAI SDK."""
+    return await generate_text_async(
+        prompt=prompt,
+        system_prompt=system_prompt,
+        model_name=model_name,
+        temperature=temperature,
+        request_timeout=request_timeout,
     )
-    return response.text
 
 async def _call_gemini_sync(
     prompt: str,
@@ -110,27 +84,15 @@ async def _call_gemini_sync(
     temperature: float,
     request_timeout: float | None = None,
 ) -> str:
-    """Helper to call Gemini API synchronously."""
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise ValueError("GOOGLE_API_KEY is not set.")
-    genai.configure(api_key=api_key)
-    
-    final_prompt = prompt
-    if system_prompt:
-        final_prompt = f"{system_prompt}\n\n{prompt}"
-        
+    """Helper to call Gemini API synchronously through the Google GenAI SDK."""
     def _generate_sync() -> str:
-        request_kwargs = {}
-        if request_timeout and request_timeout > 0:
-            request_kwargs["request_options"] = {"timeout": request_timeout}
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(
-            final_prompt,
-            generation_config=genai.GenerationConfig(temperature=temperature),
-            **request_kwargs,
+        return generate_text_sync(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model_name=model_name,
+            temperature=temperature,
+            request_timeout=request_timeout,
         )
-        return response.text
 
     if request_timeout and request_timeout > 0:
         async with asyncio.timeout(request_timeout):

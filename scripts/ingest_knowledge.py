@@ -107,6 +107,7 @@ from src.ingestion.cleanup import (
 )
 from src.ingestion.domain_metadata import enrich_domain_metadata, extract_dermatology_metadata
 from src.ingestion.json_loader import load_web_json_documents_with_stats
+from src.integrations.google_genai import embed_texts_sync
 from src.knowledge.versioning import expected_kb_payload_metadata
 
 
@@ -2381,41 +2382,20 @@ async def ensure_qdrant_collection(client: Any) -> None:
 
 
 def embed_dense_sync(texts: list[str]) -> list[list[float]]:
-    try:
-        import google.generativeai as genai  # type: ignore
-    except ImportError as exc:
-        raise SystemExit(
-            "Missing dependency. Run: pip install google-generativeai"
-        ) from exc
-
-    genai.configure(api_key=GOOGLE_API_KEY)
-
-    result = genai.embed_content(
-        model=EMBEDDING_MODEL,
-        content=texts,
+    return embed_texts_sync(
+        texts,
+        model_name=EMBEDDING_MODEL,
         task_type="retrieval_document",
+        expected_dimensions=EMBEDDING_DIMENSIONS,
+        api_key=GOOGLE_API_KEY,
     )
-
-    embeddings = result["embedding"]
-
-    if not embeddings:
-        return []
-
-    # google-generativeai returns:
-    # - list[float] for one text in some versions
-    # - list[list[float]] for multiple texts
-    if isinstance(embeddings[0], (float, int)):
-        return [list(map(float, embeddings))]
-
-    return [list(map(float, emb)) for emb in embeddings]
 
 
 
 def _extract_retry_delay_seconds(error: Exception) -> float | None:
     """Try to read retry delay from Google API error text.
 
-    The deprecated google.generativeai package often surfaces quota errors as
-    ResourceExhausted with text like:
+    Google provider quota errors sometimes include text like:
         Please retry in 3.654895925s
     We parse that hint when available, then apply a safer minimum delay in the
     async retry wrapper.

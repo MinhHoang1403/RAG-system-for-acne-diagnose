@@ -30,6 +30,7 @@ from src.knowledge.entity_index import (  # noqa: E402
     get_chunk_collection_name,
     upsert_entity_cards,
 )
+from src.integrations.google_genai import embed_texts_sync  # noqa: E402
 from src.knowledge.schemas import EntityCard  # noqa: E402
 from src.knowledge.versioning import get_embedding_metadata  # noqa: E402
 
@@ -99,32 +100,14 @@ def embed_entity_texts_sync(texts: list[str]) -> list[list[float]]:
             "GOOGLE_API_KEY is not set. Add it to .env before running with --no-dry-run."
         )
 
-    try:
-        import google.generativeai as genai  # type: ignore[import]
-    except ImportError as exc:
-        raise RuntimeError("Missing dependency. Run: pip install google-generativeai") from exc
-
-    genai.configure(api_key=google_api_key)
     embedding_metadata = get_embedding_metadata()
-    result = genai.embed_content(
-        model=embedding_metadata["embedding_model"],
-        content=texts,
+    return embed_texts_sync(
+        texts,
+        model_name=embedding_metadata["embedding_model"],
         task_type="retrieval_document",
+        expected_dimensions=int(embedding_metadata["embedding_dimensions"]),
+        api_key=google_api_key,
     )
-    embeddings = result["embedding"]
-    if not embeddings:
-        return []
-    if isinstance(embeddings[0], (float, int)):
-        embeddings = [embeddings]
-    dense_vectors = [list(map(float, embedding)) for embedding in embeddings]
-    expected_dimensions = int(embedding_metadata["embedding_dimensions"])
-    for index, vector in enumerate(dense_vectors):
-        if len(vector) != expected_dimensions:
-            raise RuntimeError(
-                f"Embedding dimension mismatch at entity {index}: got {len(vector)}, "
-                f"expected {expected_dimensions}."
-            )
-    return dense_vectors
 
 
 async def main() -> int:

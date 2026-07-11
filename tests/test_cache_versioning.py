@@ -66,6 +66,24 @@ def test_severity_guard_version_is_in_manifest_and_changes_fingerprint():
     assert compute_pipeline_fingerprint(old_manifest) != compute_pipeline_fingerprint(new_manifest)
 
 
+def test_google_genai_sdk_version_is_in_manifest_and_changes_fingerprint():
+    old_manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "GOOGLE_GENAI_SDK_VERSION": "legacy_google_sdk",
+        }
+    )
+    new_manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "GOOGLE_GENAI_SDK_VERSION": "google_genai_sdk_v1",
+        }
+    )
+
+    assert new_manifest["google_genai_sdk_version"] == "google_genai_sdk_v1"
+    assert compute_pipeline_fingerprint(old_manifest) != compute_pipeline_fingerprint(new_manifest)
+
+
 def test_pipeline_manifest_does_not_include_secret_keys():
     manifest = build_pipeline_version_manifest(
         {

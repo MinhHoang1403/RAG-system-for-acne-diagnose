@@ -1,42 +1,51 @@
 # =============================================================================
 # requirements.txt – Acne Agent System
-# Pin ALL transitive dependencies in production (use pip-compile / uv lock).
-# This file lists direct dependencies grouped by layer.
+# =============================================================================
+# File này khai báo các dependency trực tiếp theo từng layer.
 # =============================================================================
 
+
 # ---------------------------------------------------------------------------
-# Core / Config  (12-Factor: config)
+# Core / Configuration
 # ---------------------------------------------------------------------------
 python-dotenv>=1.0.0
 pydantic>=2.7.0
 pydantic-settings>=2.3.0
 
+
 # ---------------------------------------------------------------------------
-# API Layer  (src/api)
+# API Layer – src/api
 # ---------------------------------------------------------------------------
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 httpx>=0.27.0
-python-multipart>=0.0.9       # file uploads
-starlette>=0.37.0
+python-multipart>=0.0.9
+
 
 # ---------------------------------------------------------------------------
-# Agent Layer  (src/agent)
+# Agent Layer – src/agent
 # ---------------------------------------------------------------------------
 langchain>=0.2.0
 langchain-core>=0.2.0
 langchain-community>=0.2.0
+
 langchain-openai>=0.1.0
 langchain-anthropic>=0.1.0
 langchain-google-genai>=1.0.0
 langchain-ollama>=0.1.0
+
 langgraph>=0.1.0
+
 openai>=1.30.0
 anthropic>=0.28.0
-google-generativeai>=0.7.0
+
+# Google Gen AI SDK mới.
+# Giữ nhánh 1.x trong Step 8 để migration có phạm vi kiểm soát được.
+google-genai>=1.75.0,<2.0.0
+
 
 # ---------------------------------------------------------------------------
-# Skills Layer  (src/skills)
+# Skills Layer – src/skills
 # ---------------------------------------------------------------------------
 requests>=2.32.0
 aiohttp>=3.9.5
@@ -45,30 +54,47 @@ lxml>=5.2.0
 pdfplumber>=0.11.0
 pypdf>=4.2.0
 
+
 # ---------------------------------------------------------------------------
-# Database Layer  (src/database)
+# Database Layer – src/database
 # ---------------------------------------------------------------------------
 sqlalchemy[asyncio]>=2.0.30
-asyncpg>=0.29.0               # PostgreSQL async driver
-psycopg2-binary>=2.9.9        # PostgreSQL sync driver for admin scripts
-alembic>=1.13.0               # DB migrations
+
+# PostgreSQL drivers
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.9
+
+# Database migrations
+alembic>=1.13.0
+
+# Cache and vector/graph databases
 redis[hiredis]>=5.0.4
 qdrant-client>=1.9.0
-neo4j>=5.0.0                   # Neo4j async driver for knowledge graph
+neo4j>=5.0.0
 
-# Vector / Embedding
-sentence-transformers>=3.0.0
-numpy>=1.26.4
-faiss-cpu>=1.8.0              # optional local vector store fallback
 
 # ---------------------------------------------------------------------------
-# Knowledge Ingestion  (scripts/)
+# Vector / Embedding / Local Reranker
+# ---------------------------------------------------------------------------
+sentence-transformers>=3.0.0
+numpy>=1.26.4
+
+# Optional local vector-store fallback.
+faiss-cpu>=1.8.0
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Ingestion – scripts/
 # ---------------------------------------------------------------------------
 tiktoken>=0.7.0
 langchain-text-splitters>=0.2.0
+
+# LlamaParse client
 llama-parse>=0.4.0
+
 PyYAML>=6.0.1
 tqdm>=4.66.4
+
 
 # ---------------------------------------------------------------------------
 # Observability
@@ -76,9 +102,11 @@ tqdm>=4.66.4
 opentelemetry-api>=1.24.0
 opentelemetry-sdk>=1.24.0
 opentelemetry-exporter-otlp>=1.24.0
+
 prometheus-client>=0.20.0
 structlog>=24.2.0
 sentry-sdk[fastapi]>=2.4.0
+
 
 # ---------------------------------------------------------------------------
 # Testing
@@ -86,11 +114,15 @@ sentry-sdk[fastapi]>=2.4.0
 pytest>=8.2.0
 pytest-asyncio>=0.23.7
 pytest-cov>=5.0.0
-httpx>=0.27.0                 # async test client for FastAPI
+
 
 # ---------------------------------------------------------------------------
-# Dev / Linting (install with: pip install -r requirements-dev.txt)
+# Development / Linting
 # ---------------------------------------------------------------------------
+# Hiện dự án chưa có requirements-dev.txt.
+# Khi cần tách development dependencies, hãy tạo file riêng và đưa các package
+# dưới đây vào file đó:
+#
 # ruff>=0.4.7
 # mypy>=1.10.0
 # pre-commit>=3.7.0
