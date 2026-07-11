@@ -99,7 +99,7 @@ sequenceDiagram
             alt --skip-graph-extraction
                 CLI-->>CLI: Tạo extraction_error payload, không gọi Ollama
             else Gọi Ollama
-                CLI->>Ollama: Prompt qwen2.5 trích xuất graph JSON
+                CLI->>Ollama: Prompt theo OLLAMA_MODEL trích xuất graph JSON
                 Ollama-->>CLI: Raw JSON/text
                 CLI->>CLI: Parse, normalize, validate nodes/edges
                 alt Payload hợp lệ
