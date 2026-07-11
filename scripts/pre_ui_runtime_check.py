@@ -39,6 +39,9 @@ SECRET_MARKERS = (
     "key",
 )
 URL_CONFIG_KEYS = {"DATABASE_URL", "REDIS_URL"}
+ENV_SUMMARY_DEFAULTS = {
+    "REPRODUCIBLE_ENVIRONMENT_VERSION": "reproducible_environment_v1",
+}
 RERANK_PROVIDERS_WITHOUT_MODEL = {"local_rules"}
 RERANK_PROVIDERS_WITH_MODEL = {"hybrid", "local_semantic", "local_cross_encoder", "semantic", "local_model"}
 
@@ -90,6 +93,13 @@ async def run_pre_ui_runtime_check() -> dict[str, Any]:
             "google_genai_sdk_version",
             manifest.get("google_genai_sdk_version") == "google_genai_sdk_v1",
             {"google_genai_sdk_version": manifest.get("google_genai_sdk_version")},
+        )
+    )
+    checks.append(
+        check(
+            "reproducible_environment_version",
+            manifest.get("reproducible_environment_version") == "reproducible_environment_v1",
+            {"reproducible_environment_version": manifest.get("reproducible_environment_version")},
         )
     )
     checks.append(
@@ -211,6 +221,7 @@ def _env_summary() -> dict[str, str]:
         "SEVERITY_GUARD_VERSION",
         "SAFE_FALLBACK_FLOW_VERSION",
         "GOOGLE_GENAI_SDK_VERSION",
+        "REPRODUCIBLE_ENVIRONMENT_VERSION",
         "TAXONOMY_VERSION",
         "RUNTIME_RESILIENCE_VERSION",
         "AGENT_TOTAL_TIMEOUT_SECONDS",
@@ -242,7 +253,7 @@ def _env_summary() -> dict[str, str]:
         elif any(marker in name.lower() for marker in SECRET_MARKERS):
             summary[name] = "<REDACTED>" if value else "<EMPTY>"
         else:
-            summary[name] = value or "<MISSING>"
+            summary[name] = value or ENV_SUMMARY_DEFAULTS.get(name, "<MISSING>")
     return summary
 
 
