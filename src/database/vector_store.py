@@ -65,27 +65,22 @@ def _embed_sync(text: str) -> list[float]:
 
     Uses task_type="retrieval_query" (vs. "retrieval_document" at ingestion).
     """
-    import google.generativeai as genai  # type: ignore[import]
+    from src.integrations.google_genai import embed_texts_sync
 
-    if not GOOGLE_API_KEY:
+    key = GOOGLE_API_KEY.strip()
+    if not key:
         raise RuntimeError(
             "GOOGLE_API_KEY is not set. Add it to .env for embedding."
         )
 
-    genai.configure(api_key=GOOGLE_API_KEY)
-
-    result = genai.embed_content(
-        model=EMBEDDING_MODEL,
-        content=text,
+    vectors = embed_texts_sync(
+        [text],
+        model_name=EMBEDDING_MODEL,
         task_type="retrieval_query",
+        expected_dimensions=EMBEDDING_DIMENSIONS,
+        api_key=key,
     )
-
-    embedding = result["embedding"]
-
-    # google-generativeai may return list[float] or list[list[float]]
-    if isinstance(embedding[0], list):
-        return list(map(float, embedding[0]))
-    return list(map(float, embedding))
+    return vectors[0]
 
 
 async def embed_query(text: str) -> list[float]:

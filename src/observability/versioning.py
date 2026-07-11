@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 DEFAULT_ANSWER_CACHE_VERSION = "v5"
 DEFAULT_RERANKER_VERSION = "reranker_pipeline_v2"
+DEFAULT_GOOGLE_GENAI_SDK_VERSION = "google_genai_sdk_v1"
 LEGACY_ANSWER_CACHE_VERSIONS = {"v1", "v2", "v3", "v4"}
 
 _SECRET_KEY_MARKERS = (
@@ -43,6 +44,7 @@ def build_pipeline_version_manifest(settings: Mapping[str, Any] | None = None) -
         "answer_verifier_version": value("ANSWER_VERIFIER_VERSION", "answer_verifier_v2"),
         "severity_guard_version": value("SEVERITY_GUARD_VERSION", "severity_aware_answer_guard_v1"),
         "safe_fallback_flow_version": value("SAFE_FALLBACK_FLOW_VERSION", "safe_fallback_flow_v1"),
+        "google_genai_sdk_version": value("GOOGLE_GENAI_SDK_VERSION", DEFAULT_GOOGLE_GENAI_SDK_VERSION),
         "runtime_resilience_version": value("RUNTIME_RESILIENCE_VERSION", "runtime_resilience_v1"),
         "neo4j_schema_version": value("NEO4J_SCHEMA_VERSION", "neo4j_schema_v1"),
         "taxonomy_version": value("TAXONOMY_VERSION", "drug_taxonomy_v1"),
@@ -125,6 +127,7 @@ def pipeline_manifest_summary(manifest: dict[str, Any] | None = None) -> dict[st
         "answer_verifier_version",
         "severity_guard_version",
         "safe_fallback_flow_version",
+        "google_genai_sdk_version",
         "runtime_resilience_version",
         "neo4j_schema_version",
         "taxonomy_version",
@@ -228,6 +231,7 @@ def _runtime_entity_collection_name(settings: Mapping[str, Any]) -> str:
 
 __all__ = [
     "DEFAULT_ANSWER_CACHE_VERSION",
+    "DEFAULT_GOOGLE_GENAI_SDK_VERSION",
     "DEFAULT_RERANKER_VERSION",
     "build_pipeline_version_manifest",
     "compute_pipeline_fingerprint",

@@ -209,6 +209,7 @@ def inspect_runtime_code() -> dict[str, Any]:
     severity_guard_path = PROJECT_ROOT / "src" / "quality" / "severity_guard.py"
     safe_fallback_path = PROJECT_ROOT / "src" / "quality" / "safe_fallback.py"
     fallback_node_path = PROJECT_ROOT / "src" / "agent" / "nodes" / "fallback.py"
+    google_genai_adapter_path = PROJECT_ROOT / "src" / "integrations" / "google_genai.py"
     answer_quality_eval_path = PROJECT_ROOT / "scripts" / "eval_phase2_answer_quality.py"
     severity_guard_eval_path = PROJECT_ROOT / "scripts" / "eval_severity_aware_guard.py"
     safe_fallback_eval_path = PROJECT_ROOT / "scripts" / "eval_safe_fallback_flow.py"
@@ -228,6 +229,7 @@ def inspect_runtime_code() -> dict[str, Any]:
     severity_guard_source = severity_guard_path.read_text(encoding="utf-8") if severity_guard_path.exists() else ""
     safe_fallback_source = safe_fallback_path.read_text(encoding="utf-8") if safe_fallback_path.exists() else ""
     fallback_node_source = fallback_node_path.read_text(encoding="utf-8") if fallback_node_path.exists() else ""
+    google_genai_adapter_source = google_genai_adapter_path.read_text(encoding="utf-8") if google_genai_adapter_path.exists() else ""
     runtime_smoke_source = runtime_smoke_path.read_text(encoding="utf-8") if runtime_smoke_path.exists() else ""
     cache_versioning_source = cache_versioning_path.read_text(encoding="utf-8") if cache_versioning_path.exists() else ""
     observability_exporter_source = observability_exporter_path.read_text(encoding="utf-8") if observability_exporter_path.exists() else ""
@@ -305,6 +307,11 @@ def inspect_runtime_code() -> dict[str, Any]:
             "safe_fallback_flow_versioned": "safe_fallback_flow_version" in cache_versioning_source
             and "safe_fallback_flow_v1" in cache_versioning_source
             and "safe_fallback_node" in fallback_node_source,
+            "google_genai_sdk_migration_available": "build_google_genai_client" in google_genai_adapter_source
+            and "generate_text_async" in google_genai_adapter_source
+            and "embed_texts_sync" in google_genai_adapter_source,
+            "google_genai_sdk_versioned": "google_genai_sdk_version" in cache_versioning_source
+            and "google_genai_sdk_v1" in cache_versioning_source,
             "answer_quality_eval_available": answer_quality_eval_path.exists(),
             "runtime_smoke_available": runtime_smoke_path.exists(),
             "offline_smoke_available": "def run_offline_smoke" in runtime_smoke_source
