@@ -210,6 +210,7 @@ def inspect_runtime_code() -> dict[str, Any]:
     safe_fallback_path = PROJECT_ROOT / "src" / "quality" / "safe_fallback.py"
     fallback_node_path = PROJECT_ROOT / "src" / "agent" / "nodes" / "fallback.py"
     google_genai_adapter_path = PROJECT_ROOT / "src" / "integrations" / "google_genai.py"
+    reproducible_checker_path = PROJECT_ROOT / "scripts" / "check_reproducible_environment.py"
     answer_quality_eval_path = PROJECT_ROOT / "scripts" / "eval_phase2_answer_quality.py"
     severity_guard_eval_path = PROJECT_ROOT / "scripts" / "eval_severity_aware_guard.py"
     safe_fallback_eval_path = PROJECT_ROOT / "scripts" / "eval_safe_fallback_flow.py"
@@ -312,6 +313,9 @@ def inspect_runtime_code() -> dict[str, Any]:
             and "embed_texts_sync" in google_genai_adapter_source,
             "google_genai_sdk_versioned": "google_genai_sdk_version" in cache_versioning_source
             and "google_genai_sdk_v1" in cache_versioning_source,
+            "reproducible_environment_checker_available": reproducible_checker_path.exists(),
+            "reproducible_environment_versioned": "reproducible_environment_version" in cache_versioning_source
+            and "reproducible_environment_v1" in cache_versioning_source,
             "answer_quality_eval_available": answer_quality_eval_path.exists(),
             "runtime_smoke_available": runtime_smoke_path.exists(),
             "offline_smoke_available": "def run_offline_smoke" in runtime_smoke_source

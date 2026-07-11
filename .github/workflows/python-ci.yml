@@ -1,0 +1,77 @@
+name: Python CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - phase1-phase2-hardening
+  workflow_dispatch:
+
+env:
+  GOOGLE_API_KEY: ""
+  LLAMA_CLOUD_API_KEY: ""
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  OBSERVABILITY_ENABLED: "false"
+  PHASE2_DEBUG_METADATA: "false"
+  CACHE_ANSWER_VERSION: v5
+  GOOGLE_GENAI_SDK_VERSION: google_genai_sdk_v1
+  REPRODUCIBLE_ENVIRONMENT_VERSION: reproducible_environment_v1
+
+jobs:
+  tests:
+    name: Reproducible Python environment
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.9"
+          cache: pip
+          cache-dependency-path: requirements.lock.txt
+
+      - name: Install locked dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip==26.1.2
+          python -m pip install -r requirements.lock.txt
+
+      - name: Dependency consistency
+        shell: pwsh
+        run: |
+          python -m pip check
+
+      - name: Reproducibility checker
+        shell: pwsh
+        run: |
+          python scripts/check_reproducible_environment.py
+
+      - name: Legacy Google SDK scan
+        shell: pwsh
+        run: |
+          $patterns = @(
+            ("google" + "\.generativeai"),
+            ("google" + "-generativeai"),
+            "GenerativeModel",
+            "generate_content_async",
+            "genai\.configure",
+            "genai\.embed_content"
+          ) -join "|"
+          $matches = Get-ChildItem src,tests,scripts -Recurse -File -Include *.py |
+            Where-Object { $_.FullName -notmatch "__pycache__" } |
+            Select-String -Pattern $patterns -CaseSensitive:$false
+          if ($matches) {
+            $matches | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" }
+            exit 1
+          }
+
+      - name: Full test suite
+        shell: pwsh
+        run: |
+          python -m pytest -q

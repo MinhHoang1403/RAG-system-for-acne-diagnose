@@ -257,18 +257,41 @@ xác minh bằng PowerShell.
 
 ## Cài đặt
 
-Từ một clone mới:
+### Cài đặt tái lập
+
+Từ một clone mới trên Windows/Python 3.11.9:
 
 ```powershell
 git clone <repository-url>
 cd acne-agent-system
 
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+py -3.11 -m venv venv
+.\venv\Scripts\python.exe -m pip install --upgrade pip==26.1.2
+.\venv\Scripts\python.exe -m pip install -r requirements.lock.txt
+.\venv\Scripts\python.exe -m pip check
 
 Copy-Item .env.example .env
+```
+
+`requirements.txt` là danh sách direct dependencies để con người chỉnh sửa.
+`requirements.lock.txt` là lock file direct + transitive dependencies đã pin
+exact version cho môi trường kiểm thử.
+`.python-version` pin Python `3.11.9`.
+
+### Thay đổi dependency
+
+1. Sửa `requirements.txt`.
+2. Regenerate `requirements.lock.txt` bằng `pip-compile` với Python 3.11.9.
+3. Tạo clean venv ngoài repository.
+4. Cài từ `requirements.lock.txt`.
+5. Chạy `pip check`, `scripts/check_reproducible_environment.py` và full pytest.
+6. Review diff lock file.
+7. Commit cả `requirements.txt` và `requirements.lock.txt`.
+
+Kiểm tra reproducibility cục bộ:
+
+```powershell
+.\venv\Scripts\python.exe scripts\check_reproducible_environment.py
 ```
 
 Cài frontend dependencies:
@@ -282,9 +305,24 @@ cd ..\..
 Khởi động backing services:
 
 ```powershell
-docker compose up -d
+docker compose up -d --pull never
 docker compose ps
 ```
+
+Nếu containers chỉ đang stopped, ưu tiên:
+
+```powershell
+docker compose start
+```
+
+Dừng mà không xóa dữ liệu:
+
+```powershell
+docker compose stop
+```
+
+Không chạy `docker compose down -v` trừ khi bạn chủ động muốn xóa toàn bộ dữ
+liệu runtime local.
 
 Khởi tạo schema khi thiết lập môi trường local mới:
 
@@ -368,7 +406,7 @@ Chỉ dùng các biến được code path hiện tại hỗ trợ.
 Khởi động local backing services:
 
 ```powershell
-docker compose up -d
+docker compose up -d --pull never
 docker compose ps
 ```
 
