@@ -134,7 +134,7 @@ async def _run_release_readiness_agent_override(request: "ChatRequest", session_
         "cache_reason": "safe_fallback_no_retrieval_evidence" if fallback_applied else "bypassed",
         "cache_metadata": {},
         "actual_provider": "ollama" if llm_fallback_used else ("system" if fallback_applied else "gemini"),
-        "actual_model": os.getenv("OLLAMA_MODEL", "qwen3:8b") if llm_fallback_used else (None if fallback_applied else os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")),
+        "actual_model": os.getenv("OLLAMA_MODEL", "qwen3:8b") if llm_fallback_used else (None if fallback_applied else os.getenv("GOOGLE_MODEL", "gemini-3.5-flash")),
         "llm_fallback_used": llm_fallback_used,
         "fallback_provider": "ollama" if llm_fallback_used else None,
         "fallback_model": os.getenv("OLLAMA_MODEL", "qwen3:8b") if llm_fallback_used else None,
@@ -453,36 +453,67 @@ async def list_models():
     from src.agent.llm.ollama_client import list_ollama_models
     
     ollama_models = await list_ollama_models()
+    gemini_model = os.getenv("GOOGLE_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
     qwen3_8b_available = "qwen3:8b" in ollama_models
     qwen3_available = "qwen3:latest" in ollama_models
+
+    def model_entry(
+        *,
+        provider: str,
+        model_id: str,
+        display_name: str,
+        model_type: str,
+        available: bool,
+        is_default: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "provider": provider,
+            "model": model_id,
+            "model_id": model_id,
+            "label": display_name,
+            "display_name": display_name,
+            "type": model_type,
+            "available": available,
+            "is_default": is_default,
+        }
     
     return {
         "default_provider": "gemini",
-        "default_model": "gemini-2.5-flash",
+        "default_model": gemini_model,
+        "default_model_id": gemini_model,
         "models": [
-            {
-                "provider": "gemini",
-                "model": "gemini-2.5-flash",
-                "label": "Gemini 2.5 Flash",
-                "type": "cloud",
-                "available": True
-            },
-            {
-                "provider": "ollama",
-                "model": "qwen3:8b",
-                "label": "Qwen3 8B Local",
-                "type": "local",
-                "available": qwen3_8b_available
-            },
-            {
-                "provider": "ollama",
-                "model": "qwen3:latest",
-                "label": "Qwen3 Local",
-                "type": "local",
-                "available": qwen3_available
-            }
+            model_entry(
+                provider="gemini",
+                model_id=gemini_model,
+                display_name=_display_name_for_model(gemini_model),
+                model_type="cloud",
+                available=True,
+                is_default=True,
+            ),
+            model_entry(
+                provider="ollama",
+                model_id="qwen3:8b",
+                display_name="Qwen3 8B Local",
+                model_type="local",
+                available=qwen3_8b_available,
+            ),
+            model_entry(
+                provider="ollama",
+                model_id="qwen3:latest",
+                display_name="Qwen3 Local",
+                model_type="local",
+                available=qwen3_available,
+            ),
         ]
     }
+
+
+def _display_name_for_model(model_id: str) -> str:
+    aliases = {
+        "gemini-3.5-flash": "Gemini 3.5 Flash",
+        "gemini-2.5-flash": "Gemini 2.5 Flash",
+    }
+    return aliases.get(model_id, model_id)
 
 @app.post("/chat", response_model=ChatResponse, response_model_exclude_none=True)
 async def chat_endpoint(request: ChatRequest):
@@ -571,9 +602,9 @@ async def chat_endpoint(request: ChatRequest):
             if not result.get("answer"):
                  raise Exception("Agent failed to produce an answer.")
         
-        model_name = os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
+        model_name = os.getenv("GOOGLE_MODEL", "gemini-3.5-flash")
         if model_name == "gemini-1.5-flash":
-            model_name = "gemini-2.5-flash"
+            model_name = "gemini-3.5-flash"
             
         raw_graph_facts = result.get("graph_facts", [])
         

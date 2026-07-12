@@ -33,9 +33,9 @@ def _resolve_cache_model_key(state: ClinicalState) -> tuple[str, str]:
     model = state.get("llm_model")
 
     if provider == "gemini":
-        resolved = model or os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
+        resolved = model or os.getenv("GOOGLE_MODEL", "gemini-3.5-flash")
         if resolved == "gemini-1.5-flash":
-            resolved = "gemini-2.5-flash"
+            resolved = "gemini-3.5-flash"
         return provider, resolved
 
     if provider in {"ollama", "local"}:

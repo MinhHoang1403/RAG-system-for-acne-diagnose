@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any
 
 from src.retrieval.contracts import (
@@ -28,6 +29,7 @@ def pack_context(
     selected: list[ContextItem] = []
     dropped: list[dict[str, Any]] = []
     seen: set[str] = set()
+    seen_text: set[str] = set()
 
     ordered = _order_candidates_for_intent(normalized_query, merged_candidates)
 
@@ -43,8 +45,14 @@ def pack_context(
         if not item.text.strip():
             dropped.append(_drop_record(candidate, "empty_text"))
             continue
+        text_key = _near_duplicate_text_key(item.text)
+        if text_key and text_key in seen_text:
+            dropped.append(_drop_record(candidate, "near_duplicate_text"))
+            continue
         selected.append(item)
         seen.add(key)
+        if text_key:
+            seen_text.add(text_key)
 
     selected = _ensure_intent_requirements(normalized_query, selected, ordered, seen, max_items, dropped)
 
@@ -361,6 +369,14 @@ def _dedupe_key(candidate: RetrievedCandidate) -> str:
     text = candidate.text.strip()
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
     return f"{candidate.source}:text:{digest}"
+
+
+def _near_duplicate_text_key(text: str) -> str:
+    normalized = re.sub(r"\W+", " ", _safe_text(text).lower()).strip()
+    if len(normalized) < 80:
+        return ""
+    prefix = normalized[:320]
+    return hashlib.sha256(prefix.encode("utf-8")).hexdigest()[:16]
 
 
 def _drop_record(candidate: RetrievedCandidate, reason: str) -> dict[str, Any]:

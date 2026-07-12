@@ -27,6 +27,9 @@ PROVIDER_ALIASES = {
     "hybrid": PROVIDER_HYBRID,
 }
 
+_SEMANTIC_RERANKER_CACHE: dict[tuple[str, str, int, int, int, int, bool], "LocalSemanticReranker"] = {}
+_SEMANTIC_RERANKER_CACHE_LOCK = threading.Lock()
+
 
 class SemanticBackend(Protocol):
     """Minimal local semantic backend interface."""
@@ -311,6 +314,38 @@ def build_semantic_reranker_from_env(env: dict[str, str] | None = None) -> Local
     return LocalSemanticReranker(semantic_config_from_env(env))
 
 
+def get_cached_semantic_reranker_from_env(env: dict[str, str] | None = None) -> LocalSemanticReranker:
+    """Return a process-level semantic reranker for the current local model config."""
+
+    config = semantic_config_from_env(env)
+    key = _semantic_reranker_cache_key(config)
+    with _SEMANTIC_RERANKER_CACHE_LOCK:
+        cached = _SEMANTIC_RERANKER_CACHE.get(key)
+        if cached is None:
+            cached = LocalSemanticReranker(config)
+            _SEMANTIC_RERANKER_CACHE[key] = cached
+        return cached
+
+
+def clear_semantic_reranker_cache_for_tests() -> None:
+    """Clear the process-level reranker cache for isolated tests."""
+
+    with _SEMANTIC_RERANKER_CACHE_LOCK:
+        _SEMANTIC_RERANKER_CACHE.clear()
+
+
+def _semantic_reranker_cache_key(config: SemanticRerankerConfig) -> tuple[str, str, int, int, int, int, bool]:
+    return (
+        str(Path(config.model_path).expanduser()) if config.model_path else "",
+        config.device,
+        int(config.batch_size),
+        int(config.max_candidates),
+        int(config.max_query_chars),
+        int(config.max_document_chars),
+        bool(config.allow_fallback),
+    )
+
+
 def _env_bool(env: dict[str, str], name: str, default: bool) -> bool:
     value = env.get(name)
     if value in {None, ""}:
@@ -342,6 +377,8 @@ __all__ = [
     "SemanticRerankerConfig",
     "build_semantic_reranker_from_env",
     "canonical_provider_name",
+    "clear_semantic_reranker_cache_for_tests",
+    "get_cached_semantic_reranker_from_env",
     "hybrid_config_from_env",
     "hybrid_fuse_scores",
     "reranker_provider_config_from_env",

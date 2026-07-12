@@ -32,6 +32,7 @@ export default function App() {
   const [backendOnline, setBackendOnline] = useState(true); // assume online initially
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [historyHiddenAt, setHistoryHiddenAt] = useState(() => loadHistoryHiddenAt());
+  const requestInFlight = useRef(false);
 
   // Track whether initial load from backend has been done
   const initialLoadDone = useRef(false);
@@ -252,10 +253,12 @@ export default function App() {
 
   const sendQuestion = useCallback(
     async (userMessageText, modelConfig = null) => {
-      if (!userMessageText.trim() || isLoading) return;
+      const trimmedMessage = userMessageText.trim();
+      if (!trimmedMessage || isLoading || requestInFlight.current) return false;
 
       setError(null);
       setIsLoading(true);
+      requestInFlight.current = true;
 
       let currentSessionId = activeSessionId;
 
@@ -263,9 +266,9 @@ export default function App() {
       if (!currentSessionId) {
         currentSessionId = generateId();
         const title =
-          userMessageText.length > 40
-            ? userMessageText.substring(0, 40) + '...'
-            : userMessageText;
+          trimmedMessage.length > 40
+            ? trimmedMessage.substring(0, 40) + '...'
+            : trimmedMessage;
         const newSession = {
           id: currentSessionId,
           title,
@@ -279,7 +282,7 @@ export default function App() {
       }
 
       // Add user message to session
-      const userMsgObj = { role: 'user', content: userMessageText };
+      const userMsgObj = { role: 'user', content: trimmedMessage };
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id === currentSessionId) {
@@ -299,7 +302,7 @@ export default function App() {
 
       try {
         const data = await sendChatMessage({
-          message: userMessageText,
+          message: trimmedMessage,
           sessionId: currentSessionId,
           conversationHistory: history,
           llmProvider: modelConfig?.llmProvider,
@@ -332,23 +335,28 @@ export default function App() {
             return s;
           })
         );
+        return true;
       } catch (err) {
-        setError('Không kết nối được backend. Hãy kiểm tra FastAPI tại http://127.0.0.1:8000');
-        console.error(err);
+        setError(err?.message || 'Backend không thể xử lý yêu cầu. Vui lòng thử lại.');
 
-        // Check if backend went offline
-        const stillOnline = await checkBackendHealth();
-        setBackendOnline(stillOnline);
+        if (!err?.status) {
+          const stillOnline = await checkBackendHealth();
+          setBackendOnline(stillOnline);
+        }
+        return false;
       } finally {
         setIsLoading(false);
+        requestInFlight.current = false;
       }
     },
     [activeSessionId, sessions, isLoading]
   );
 
-  const handleSubmit = useCallback((text, modelConfig) => {
-    setMessage('');
-    sendQuestion(text, modelConfig);
+  const handleSubmit = useCallback(async (text, modelConfig) => {
+    const success = await sendQuestion(text, modelConfig);
+    if (success) {
+      setMessage('');
+    }
   }, [sendQuestion]);
 
   // ── Render ─────────────────────────────────────────────

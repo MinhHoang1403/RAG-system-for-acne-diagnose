@@ -203,7 +203,7 @@ def test_cache_model_key_resolution_variants(monkeypatch):
 
     assert cache_node._resolve_cache_model_key({"llm_provider": "gemini"}) == (
         "gemini",
-        "gemini-2.5-flash",
+        "gemini-3.5-flash",
     )
     assert cache_node._resolve_cache_model_key({"llm_provider": "local", "llm_model": "qwen3"}) == (
         "ollama",

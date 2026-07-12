@@ -7,12 +7,65 @@ Client for local Ollama instance.
 import logging
 import os
 import httpx
+from typing import Any
 
 from src.quality.safe_fallback import sanitize_fallback_reason
 
 logger = logging.getLogger(__name__)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name, "").strip().lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+def build_ollama_chat_payload(
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float = 0.2,
+) -> dict[str, Any]:
+    """Build the bounded Ollama chat payload without logging prompt content."""
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "think": _env_bool("OLLAMA_THINK", False),
+        "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30m").strip() or "30m",
+        "options": {
+            "num_predict": _env_int("OLLAMA_NUM_PREDICT", 192),
+            "num_ctx": _env_int("OLLAMA_NUM_CTX", 4096),
+            "temperature": _env_float("OLLAMA_TEMPERATURE", temperature),
+            "top_k": _env_int("OLLAMA_TOP_K", 20),
+            "top_p": _env_float("OLLAMA_TOP_P", 0.9),
+        },
+    }
+    return payload
 
 async def list_ollama_models(timeout_seconds: float | None = None) -> list[str]:
     """Fetch the list of available models from local Ollama."""
@@ -41,14 +94,11 @@ async def generate_ollama_response(
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-        "options": {
-            "temperature": temperature
-        }
-    }
+    payload = build_ollama_chat_payload(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+    )
 
     try:
         timeout = request_timeout or float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "90"))

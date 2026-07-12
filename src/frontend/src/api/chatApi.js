@@ -1,4 +1,11 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+export const API_BASE_URL = (import.meta.env && import.meta.env.VITE_API_URL) || 'http://127.0.0.1:8000';
+
+const STATUS_MESSAGES = {
+  429: 'Hệ thống đang nhận quá nhiều yêu cầu. Vui lòng thử lại sau.',
+  500: 'Backend không thể xử lý yêu cầu. Vui lòng thử lại.',
+  503: 'Dịch vụ AI tạm thời chưa sẵn sàng. Vui lòng thử lại sau.',
+  504: 'Yêu cầu xử lý quá thời gian. Vui lòng thử lại hoặc chọn mô hình khác.',
+};
 
 export async function parseApiError(response, fallbackPrefix = 'Lỗi server') {
   let detail;
@@ -9,9 +16,13 @@ export async function parseApiError(response, fallbackPrefix = 'Lỗi server') {
     detail = null;
   }
 
-  const message = typeof detail === 'object' && detail?.message
-    ? detail.message
-    : `${fallbackPrefix}: ${response.status}`;
+  const backendMessage = typeof detail === 'object' && detail?.message ? detail.message : null;
+  let message = STATUS_MESSAGES[response.status] || `${fallbackPrefix}: ${response.status}`;
+  if ((response.status === 400 || response.status === 422) && backendMessage) {
+    message = backendMessage;
+  } else if (response.status === 400 || response.status === 422) {
+    message = 'Yêu cầu không hợp lệ. Vui lòng kiểm tra nội dung và thử lại.';
+  }
   const error = new Error(message);
   error.status = response.status;
   if (typeof detail === 'object' && detail) {
@@ -46,20 +57,28 @@ export async function sendChatMessage({
   allowModelFallback,
   bypassCache = false,
 }) {
-  const response = await fetch(`${API_BASE_URL}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message,
-      user_id: null,
-      session_id: sessionId,
-      conversation_history: conversationHistory,
-      llm_provider: llmProvider,
-      llm_model: llmModel,
-      allow_model_fallback: allowModelFallback,
-      bypass_cache: bypassCache,
-    }),
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message,
+        user_id: null,
+        session_id: sessionId,
+        conversation_history: conversationHistory,
+        llm_provider: llmProvider,
+        llm_model: llmModel,
+        allow_model_fallback: allowModelFallback,
+        bypass_cache: bypassCache,
+      }),
+    });
+  } catch (err) {
+    const error = new Error('Không thể kết nối tới backend. Hãy kiểm tra FastAPI tại http://127.0.0.1:8000.');
+    error.cause = err;
+    error.status = null;
+    throw error;
+  }
 
   if (!response.ok) {
     throw await parseApiError(response);

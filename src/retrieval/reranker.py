@@ -23,8 +23,8 @@ from src.retrieval.reranking.providers import (
     PROVIDER_HYBRID,
     PROVIDER_LOCAL_RULES,
     PROVIDER_LOCAL_SEMANTIC,
-    build_semantic_reranker_from_env,
     canonical_provider_name,
+    get_cached_semantic_reranker_from_env,
     hybrid_config_from_env,
     hybrid_fuse_scores,
 )
@@ -198,7 +198,7 @@ def _score_with_provider(
             False,
         )
 
-    reranker = semantic_reranker or build_semantic_reranker_from_env()
+    reranker = semantic_reranker or get_cached_semantic_reranker_from_env()
     try:
         semantic_ranked = reranker.rerank(
             normalized_query.original_query,

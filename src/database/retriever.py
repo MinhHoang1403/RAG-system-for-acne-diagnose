@@ -114,6 +114,17 @@ def prioritize_main_contexts(results: list[dict[str, Any]], top_k: int) -> list[
     return selected
 
 
+def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int | None = None) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
 def extract_query_dermatology_metadata(query: str) -> dict[str, Any]:
     """Extract dermatology metadata from a user query string.
 
@@ -416,11 +427,13 @@ class HybridRetriever:
         warnings.extend(rerank_trace.warnings)
 
         t_pack_start = time.time()
+        context_max_items = _env_int("RETRIEVAL_CONTEXT_MAX_ITEMS", 5, minimum=3, maximum=10)
+        context_max_chars = _env_int("RETRIEVAL_CONTEXT_MAX_CHARS", 4200, minimum=1200, maximum=12000)
         packed_context = pack_context(
             normalized_query=normalized_query,
             merged_candidates=reranked_candidates,
-            max_items=max(top_k, 5),
-            max_chars=6000,
+            max_items=min(max(top_k, 5), context_max_items),
+            max_chars=context_max_chars,
         )
         t_pack = time.time() - t_pack_start
         selected_candidates = _candidates_for_packed_items(reranked_candidates, packed_context)
