@@ -17,6 +17,7 @@ from src.observability.versioning import (
     compute_pipeline_fingerprint,
     pipeline_manifest_summary,
 )
+from src.quality.safe_fallback import sanitize_fallback_reason
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ def sanitize_for_observability(data: Any, max_text_chars: int = 500) -> Any:
         return [sanitize_for_observability(item, max_text_chars=max_text_chars) for item in data]
 
     if isinstance(data, str):
+        data = sanitize_fallback_reason(data, max_chars=max(len(data), max_text_chars))
         if len(data) > max_text_chars:
             return data[:max_text_chars] + f"...[truncated {len(data) - max_text_chars} chars]"
         return data
@@ -93,8 +95,29 @@ def build_observability_event(
     warnings_count += len(packed_context.get("warnings", []) or [])
     warnings_count += sum(1 for issue in issues if isinstance(issue, dict) and issue.get("severity") == "warning")
 
+    summary_metadata = {
+        "answer_guard_modified": result.get("answer_guard_modified", state.get("answer_guard_modified")),
+        "answer_guard_mode": result.get("answer_guard_mode", state.get("answer_guard_mode")),
+        "retrieval_status": result.get("retrieval_status", state.get("retrieval_status")),
+        "fallback_applied": result.get("fallback_applied", state.get("fallback_applied")),
+        "fallback_type": result.get("fallback_type", state.get("fallback_type")),
+        "fallback_reason": result.get("fallback_reason", state.get("fallback_reason")),
+        "fallback_cache_eligible": result.get(
+            "fallback_cache_eligible",
+            state.get("fallback_cache_eligible"),
+        ),
+        "medical_severity": result.get("medical_severity", state.get("medical_severity")),
+        "severity_guard_modified": result.get(
+            "severity_guard_modified",
+            state.get("severity_guard_modified"),
+        ),
+        "cache_reason": result.get("cache_reason", state.get("cache_reason")),
+        "pipeline_manifest": pipeline_manifest_summary(pipeline_manifest),
+        "runtime_resilience": result.get("runtime_resilience", state.get("runtime_resilience")),
+    }
+
     summary = PipelineTraceSummary(
-        query=query,
+        query=_safe_query_summary(query),
         intent=normalized_query.get("intent") or quality_report.get("intent"),
         normalized_entities={
             "drug_product": normalized_query.get("drug_product", []),
@@ -114,28 +137,7 @@ def build_observability_event(
         cache_hit=result.get("cache_hit", state.get("cache_hit")),
         pipeline_fingerprint=pipeline_fingerprint,
         timings_ms=_float_dict(retrieval_trace.get("timings_ms", {})),
-        metadata={
-            "answer_guard_modified": result.get("answer_guard_modified", state.get("answer_guard_modified")),
-            "answer_guard_mode": result.get("answer_guard_mode", state.get("answer_guard_mode")),
-            "retrieval_status": result.get("retrieval_status", state.get("retrieval_status")),
-            "fallback_applied": result.get("fallback_applied", state.get("fallback_applied")),
-            "fallback_type": result.get("fallback_type", state.get("fallback_type")),
-            "fallback_reason": result.get("fallback_reason", state.get("fallback_reason")),
-            "fallback_cache_eligible": result.get(
-                "fallback_cache_eligible",
-                state.get("fallback_cache_eligible"),
-            ),
-            "medical_severity": result.get("medical_severity", state.get("medical_severity")),
-            "severity_guard_modified": result.get(
-                "severity_guard_modified",
-                state.get("severity_guard_modified"),
-            ),
-            "cache_reason": result.get("cache_reason", state.get("cache_reason")),
-            "pipeline_manifest": pipeline_manifest_summary(pipeline_manifest),
-            "runtime_resilience": sanitize_for_observability(
-                result.get("runtime_resilience", state.get("runtime_resilience"))
-            ),
-        },
+        metadata=sanitize_for_observability(summary_metadata, max_text_chars=max_text_chars),
     )
 
     payload = safe_payload or {
@@ -187,7 +189,7 @@ def export_observability_event(
             handle.write(json.dumps(event.model_dump(mode="json"), ensure_ascii=False, sort_keys=True) + "\n")
         return True
     except Exception as exc:  # pragma: no cover - deliberately fail-open
-        logger.warning("Failed to export observability event: %s", exc)
+        logger.warning("Failed to export observability event: %s", sanitize_fallback_reason(exc))
         return False
 
 
@@ -211,6 +213,11 @@ def _float_dict(value: Any) -> dict[str, float]:
         except (TypeError, ValueError):
             continue
     return result
+
+
+def _safe_query_summary(query: str) -> str:
+    text = query or ""
+    return f"[REDACTED_QUERY chars={len(text)}]"
 
 
 __all__ = [
