@@ -125,6 +125,18 @@ def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int | None =
     return value
 
 
+def _rerank_timeout_within_retrieval_budget() -> float:
+    settings = runtime_resilience_settings_from_env()
+    rerank_timeout = float(settings.rerank_timeout_seconds)
+    retrieval_timeout = float(settings.retrieval_timeout_seconds)
+    if retrieval_timeout <= 1:
+        return max(0.1, min(rerank_timeout, retrieval_timeout))
+    # Reranker must time out before the enclosing retrieval stage so fallback
+    # can preserve a 200 response instead of leaking a retrieval-level 504.
+    budgeted_timeout = max(1.0, retrieval_timeout * 0.5)
+    return max(0.1, min(rerank_timeout, budgeted_timeout))
+
+
 def extract_query_dermatology_metadata(query: str) -> dict[str, Any]:
     """Extract dermatology metadata from a user query string.
 
@@ -381,7 +393,7 @@ class HybridRetriever:
         )
         t_rerank_start = time.time()
         rerank_top_n = rerank_top_n_from_env(default=max(top_k * 2, 8))
-        rerank_timeout_seconds = runtime_resilience_settings_from_env().rerank_timeout_seconds
+        rerank_timeout_seconds = _rerank_timeout_within_retrieval_budget()
         if rerank_enabled_from_env():
             try:
                 reranked_candidates, rerank_trace = await asyncio.wait_for(
