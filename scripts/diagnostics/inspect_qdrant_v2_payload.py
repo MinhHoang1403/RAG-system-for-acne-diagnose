@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -43,10 +42,7 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Config
-# ─────────────────────────────────────────────────────────────────────────────
-
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+from src.database.vector_store import qdrant_client_kwargs
 
 # Fields expected from Phase 1.5
 DERMATOLOGY_FIELDS = [
@@ -103,7 +99,7 @@ async def inspect(collection: str, limit: int) -> int:
         print("❌ qdrant-client not installed. Run: pip install qdrant-client")
         return 1
 
-    client = AsyncQdrantClient(url=QDRANT_URL)
+    client = AsyncQdrantClient(**qdrant_client_kwargs())
 
     try:
         # Check collection exists

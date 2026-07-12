@@ -18,7 +18,7 @@ Pipeline
   - Supports --limit-chunks for test runs.
 
 [STAGE 3] GRAPH EXTRACTION
-  - Use Ollama/Qwen2.5 to extract clinical nodes/edges from each chunk.
+  - Use Ollama/Qwen3 to extract clinical nodes/edges from each chunk.
   - Cache graph extraction per chunk to data/cache/graph.
   - Supports resume: already cached chunks are skipped.
   - Supports --skip-graph-extraction to load cached graph only.
@@ -131,7 +131,7 @@ logger = logging.getLogger("ingest_knowledge")
 LLAMA_CLOUD_API_KEY: str = os.getenv("LLAMA_CLOUD_API_KEY", "")
 
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5")
+OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 
 GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "models/gemini-embedding-2")
@@ -3572,5 +3572,11 @@ async def main() -> int:
     return 0
 
 
+def cli() -> int:
+    """Synchronous console-script wrapper."""
+
+    return asyncio.run(main())
+
+
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    raise SystemExit(cli())

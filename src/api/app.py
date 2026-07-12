@@ -453,7 +453,7 @@ async def list_models():
     from src.agent.llm.ollama_client import list_ollama_models
     
     ollama_models = await list_ollama_models()
-    qwen25_available = "qwen2.5:latest" in ollama_models
+    qwen3_8b_available = "qwen3:8b" in ollama_models
     qwen3_available = "qwen3:latest" in ollama_models
     
     return {
@@ -469,10 +469,10 @@ async def list_models():
             },
             {
                 "provider": "ollama",
-                "model": "qwen2.5:latest",
-                "label": "Qwen2.5 Local",
+                "model": "qwen3:8b",
+                "label": "Qwen3 8B Local",
                 "type": "local",
-                "available": qwen25_available
+                "available": qwen3_8b_available
             },
             {
                 "provider": "ollama",
