@@ -88,14 +88,14 @@ async def test_qdrant_connection() -> bool:
 
     try:
         from qdrant_client import AsyncQdrantClient  # type: ignore[import]
+        from src.database.vector_store import qdrant_client_kwargs
     except ImportError:
         print("  ✗ qdrant-client not installed.")
         return False
 
-    url = os.getenv("QDRANT_URL", "http://localhost:6333")
     collection = os.getenv("QDRANT_COLLECTION_NAME", "acne_knowledge")
 
-    client = AsyncQdrantClient(url=url)
+    client = AsyncQdrantClient(**qdrant_client_kwargs())
     try:
         info = await client.get_collection(collection_name=collection)
         print(f"  ✓ Collection : {collection}")

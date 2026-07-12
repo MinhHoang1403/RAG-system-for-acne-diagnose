@@ -161,7 +161,7 @@ async def run_test(collection: str) -> int:
     try:
         # ── Verify collection + check sparse config ──────────────────
         from qdrant_client import AsyncQdrantClient  # type: ignore
-        check_client = AsyncQdrantClient(url=vs_module.QDRANT_URL)
+        check_client = AsyncQdrantClient(**vs_module.qdrant_client_kwargs())
 
         try:
             collections_resp = await check_client.get_collections()

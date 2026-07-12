@@ -1,7 +1,12 @@
 from pathlib import Path
 
 from src.retrieval.reranking.contracts import RerankCandidate, RerankerUnavailable
-from src.retrieval.reranking.providers import LocalSemanticReranker, SemanticRerankerConfig
+from src.retrieval.reranking.providers import (
+    LocalSemanticReranker,
+    SemanticRerankerConfig,
+    clear_semantic_reranker_cache_for_tests,
+    get_cached_semantic_reranker_from_env,
+)
 
 
 class FakeBackend:
@@ -89,3 +94,23 @@ def test_cross_encoder_backend_source_enforces_local_files_only():
 
     assert "local_files_only=True" in source
     assert "TRANSFORMERS_OFFLINE" in source
+
+
+def test_cached_semantic_reranker_reuses_instance_for_same_model_and_device(monkeypatch, tmp_path):
+    clear_semantic_reranker_cache_for_tests()
+    model_path = tmp_path / "local-reranker"
+    model_path.mkdir()
+    monkeypatch.setenv("SEMANTIC_RERANK_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("SEMANTIC_RERANK_DEVICE", "cuda")
+    monkeypatch.setenv("SEMANTIC_RERANK_BATCH_SIZE", "4")
+
+    first = get_cached_semantic_reranker_from_env()
+    second = get_cached_semantic_reranker_from_env()
+
+    assert first is second
+
+    monkeypatch.setenv("SEMANTIC_RERANK_DEVICE", "cpu")
+    third = get_cached_semantic_reranker_from_env()
+
+    assert third is not first
+    clear_semantic_reranker_cache_for_tests()

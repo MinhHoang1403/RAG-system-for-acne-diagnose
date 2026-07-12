@@ -12,6 +12,7 @@ from typing import Optional
 from src.agent.llm.ollama_client import generate_ollama_response, list_ollama_models
 from src.agent.text_encoding import repair_mojibake
 from src.integrations.google_genai import generate_text_async, generate_text_sync
+from src.quality.safe_fallback import sanitize_fallback_reason
 from src.resilience.budget import DeadlineBudget
 from src.resilience.circuit_breaker import CircuitBreaker, InMemoryCircuitStateStore
 from src.resilience.contracts import RuntimeResilienceSettings, runtime_resilience_settings_from_env
@@ -24,6 +25,9 @@ from src.resilience.provider import call_provider_with_resilience
 from src.resilience.retry import RetryPolicy
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 
 _CIRCUIT_STORE = InMemoryCircuitStateStore()
 _CIRCUIT_BREAKER = CircuitBreaker(runtime_resilience_settings_from_env(), store=_CIRCUIT_STORE)
@@ -48,17 +52,21 @@ def _resolve_model(provider: str, model: Optional[str]) -> tuple[str, str]:
     if provider == "local":
         provider = "ollama"
     if provider == "gemini":
-        resolved = model or os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
+        resolved = model or os.getenv("GOOGLE_MODEL", DEFAULT_GEMINI_MODEL)
         if resolved == "gemini-1.5-flash":
-            resolved = "gemini-2.5-flash"
+            resolved = DEFAULT_GEMINI_MODEL
         return provider, resolved
     if provider == "ollama":
-        configured_model = os.getenv("OLLAMA_MODEL", "qwen2.5")
+        configured_model = os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
         resolved = model or configured_model
         if ":" not in resolved:
             resolved = f"{resolved}:latest"
         return provider, resolved
     return provider, model or ""
+
+
+def _safe_error_text(exc: BaseException) -> str:
+    return sanitize_fallback_reason(exc)
 
 
 async def _call_gemini(
@@ -230,28 +238,32 @@ async def generate_llm_response(
     except asyncio.CancelledError:
         raise
     except PermanentProviderError as e:
-        logger.warning("Primary LLM (%s/%s) failed permanently: %s", provider, model, e)
-        result["error"] = str(e)
+        error_text = _safe_error_text(e)
+        logger.warning("Primary LLM (%s/%s) failed permanently: %s", provider, model, error_text)
+        result["error"] = error_text
         raise
     except CircuitOpenError as e:
-        logger.warning("Primary LLM circuit is open (%s/%s): %s", provider, model, e)
+        error_text = _safe_error_text(e)
+        logger.warning("Primary LLM circuit is open (%s/%s): %s", provider, model, error_text)
         if not allow_fallback:
-            result["error"] = str(e)
+            result["error"] = error_text
             raise
         primary_error = e
     except RuntimeResilienceError as e:
-        logger.warning("Primary LLM (%s/%s) failed: %s", provider, model, e)
+        error_text = _safe_error_text(e)
+        logger.warning("Primary LLM (%s/%s) failed: %s", provider, model, error_text)
         if not allow_fallback:
-            result["error"] = str(e)
+            result["error"] = error_text
             raise
         primary_error = e
     except Exception as e:
-        logger.warning(f"Primary LLM ({provider}/{model}) failed: {e}")
+        error_text = _safe_error_text(e)
+        logger.warning("Primary LLM (%s/%s) failed: %s", provider, model, error_text)
         
         # 2. Try Fallback
         if not allow_fallback:
             logger.error("Fallback is disabled. Failing.")
-            result["error"] = str(e)
+            result["error"] = error_text
             raise e
 
         primary_error = e
@@ -263,7 +275,7 @@ async def generate_llm_response(
             # Fallback to Ollama
             available_models = await list_ollama_models(timeout_seconds=min(5.0, budget.remaining_seconds()))
             fallback_model = None
-            configured_model = os.getenv("OLLAMA_MODEL", "qwen2.5")
+            configured_model = os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
             configured_model = (
                 configured_model
                 if ":" in configured_model
@@ -271,14 +283,16 @@ async def generate_llm_response(
             )
             if configured_model in available_models:
                 fallback_model = configured_model
-            elif "qwen2.5:latest" in available_models:
-                fallback_model = "qwen2.5:latest"
+            elif DEFAULT_OLLAMA_MODEL in available_models:
+                fallback_model = DEFAULT_OLLAMA_MODEL
             elif "qwen3:latest" in available_models:
                 fallback_model = "qwen3:latest"
+            elif "qwen2.5:latest" in available_models:
+                fallback_model = "qwen2.5:latest"
                 
             if fallback_model:
                 try:
-                    logger.info(f"Fallback to Ollama ({fallback_model})...")
+                    logger.info("Fallback to Ollama (%s)...", fallback_model)
                     text, resilience_meta = await _call_provider_resilient(
                         provider="ollama",
                         model=fallback_model,
@@ -296,24 +310,26 @@ async def generate_llm_response(
                     result["fallback_model"] = fallback_model
                     return result
                 except Exception as fb_err:
-                    logger.error(f"Fallback Ollama also failed: {fb_err}")
+                    primary_text = _safe_error_text(primary_error)
+                    fallback_text = _safe_error_text(fb_err)
+                    logger.error("Fallback Ollama also failed: %s", fallback_text)
                     if isinstance(fb_err, RuntimeResilienceError):
                         raise fb_err
-                    result["error"] = f"Primary ({primary_error}) and Fallback ({fb_err}) both failed."
+                    result["error"] = f"Primary ({primary_text}) and Fallback ({fallback_text}) both failed."
                     raise Exception(result["error"])
             else:
                 logger.error("No suitable Ollama models available for fallback.")
-                result["error"] = str(primary_error)
+                result["error"] = _safe_error_text(primary_error)
                 raise primary_error
                 
         elif provider == "ollama":
             # Fallback to Gemini
-            fallback_model = os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
+            fallback_model = os.getenv("GOOGLE_MODEL", DEFAULT_GEMINI_MODEL)
             if fallback_model == "gemini-1.5-flash":
-                fallback_model = "gemini-2.5-flash"
+                fallback_model = DEFAULT_GEMINI_MODEL
                 
             try:
-                logger.info(f"Fallback to Gemini ({fallback_model})...")
+                logger.info("Fallback to Gemini (%s)...", fallback_model)
                 text, resilience_meta = await _call_provider_resilient(
                     provider="gemini",
                     model=fallback_model,
@@ -331,10 +347,12 @@ async def generate_llm_response(
                 result["fallback_model"] = fallback_model
                 return result
             except Exception as fb_err:
-                logger.error(f"Fallback Gemini also failed: {fb_err}")
+                primary_text = _safe_error_text(primary_error)
+                fallback_text = _safe_error_text(fb_err)
+                logger.error("Fallback Gemini also failed: %s", fallback_text)
                 if isinstance(fb_err, RuntimeResilienceError):
                     raise fb_err
-                result["error"] = f"Primary ({primary_error}) and Fallback ({fb_err}) both failed."
+                result["error"] = f"Primary ({primary_text}) and Fallback ({fallback_text}) both failed."
                 raise Exception(result["error"])
     except asyncio.CancelledError:
         raise

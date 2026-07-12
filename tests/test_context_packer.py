@@ -82,6 +82,27 @@ def test_drug_identity_packs_entity_and_chunk_evidence():
     assert "topical_antibiotic" in packed.context_text
 
 
+def test_forced_source_does_not_include_empty_text_candidate():
+    normalized = normalize_query("Dalacin T là gì?")
+    candidates = [
+        _entity("entity:dalacin", "Dalacin T", active_ingredients=["clindamycin"]),
+        _chunk(
+            "chunk:empty",
+            "",
+            drug_product=["Dalacin T"],
+            active_ingredient=["clindamycin"],
+        ),
+    ]
+
+    packed = pack_context(normalized, candidates, max_items=4)
+
+    assert packed.entity_items_count == 1
+    assert packed.chunk_items_count == 0
+    assert all(item.text.strip() for item in packed.items)
+    assert any(drop["reason"] == "empty_text" for drop in packed.debug["pack_trace"]["dropped_candidates"])
+    assert "Drug intent packed context has entity card but no chunk evidence." in packed.warnings
+
+
 def test_acne_type_prioritizes_chunk_over_drug_entity():
     normalized = normalize_query("Mụn đầu đen là gì?")
     candidates = [
@@ -169,3 +190,40 @@ def test_bridge_to_legacy_contexts_preserves_prompt_fields():
     assert contexts[0]["text"]
     assert contexts[0]["context_role"] == "primary_entity"
     assert contexts[1]["context_role"] == "supporting_evidence"
+
+
+def test_pack_context_drops_near_duplicate_long_text_but_keeps_safety_evidence():
+    normalized = normalize_query("Retinoid có dùng khi mang thai không?")
+    duplicate_text = "Retinoids require pregnancy safety counseling and contraception. " * 8
+    packed = pack_context(
+        normalized,
+        [
+            _chunk(
+                "chunk:pregnancy-a",
+                duplicate_text,
+                safety_context=["pregnancy"],
+                drug_class=["topical_retinoid"],
+            ),
+            _chunk(
+                "chunk:pregnancy-b",
+                duplicate_text + "Minor trailing difference.",
+                safety_context=["pregnancy"],
+                drug_class=["topical_retinoid"],
+            ),
+            _chunk(
+                "chunk:irritation",
+                "Retinoids can irritate skin.",
+                safety_context=["irritation"],
+                drug_class=["topical_retinoid"],
+            ),
+        ],
+        max_items=3,
+        max_chars=900,
+    )
+
+    assert packed.chunk_items_count == 2
+    assert "pregnancy" in packed.context_text
+    assert any(
+        drop["reason"] == "near_duplicate_text"
+        for drop in packed.debug["pack_trace"]["dropped_candidates"]
+    )

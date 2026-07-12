@@ -1,6 +1,23 @@
 import { formatText } from '../utils/markdown.jsx';
 import DebugPanel from './DebugPanel.jsx';
 
+function modelDisplayName(provider, model) {
+  const modelId = model || '';
+  if (provider === 'gemini' || modelId.includes('gemini')) {
+    if (modelId.includes('3.5')) return 'Gemini 3.5 Flash';
+    if (modelId.includes('2.5')) return 'Gemini 2.5 Flash';
+    return modelId || 'Gemini';
+  }
+  if (provider === 'ollama' || modelId.includes('qwen')) {
+    if (modelId.includes('qwen3:8b')) return 'Qwen3 8B Local';
+    if (modelId.includes('qwen3')) return 'Qwen3 Local';
+    if (modelId.includes('qwen2')) return 'Qwen2.5 Local';
+    return modelId ? `${modelId} Local` : 'Ollama';
+  }
+  if (provider === 'rule_based') return 'Rule-based';
+  return modelId || provider || 'Unknown model';
+}
+
 export default function ChatMessage({ msg }) {
   const isUser = msg.role === 'user';
   const data = msg.data || null;
@@ -80,27 +97,20 @@ export default function ChatMessage({ msg }) {
                             const meta = data.metadata;
                             if (meta.provider === 'system' || meta.model === 'guardrail-rule') return '🛡️ Guardrail';
                             if (meta.cache && meta.cache.hit) {
-                              const origProv = meta.cached_from_provider === 'gemini' ? 'Gemini 2.5 Flash' : 'Ollama';
-                              let fbName = meta.cached_from_model || origProv;
-                              if (fbName.includes('qwen2')) fbName = 'Qwen2.5 Local';
-                              else if (fbName.includes('qwen3')) fbName = 'Qwen3 Local';
-                              else if (fbName.includes('gemini')) fbName = 'Gemini 2.5 Flash';
+                              const fbName = modelDisplayName(
+                                meta.cached_from_provider,
+                                meta.cached_from_model,
+                              );
                               return `♻️ Cached · originally answered by ${fbName}`;
                             }
                             if (meta.fallback_used && meta.fallback_provider) {
-                              const origName = meta.provider === 'gemini' ? 'Gemini' : 'Ollama';
-                              let fbName = meta.fallback_model;
-                              if (meta.fallback_provider === 'gemini') fbName = 'Gemini 2.5 Flash';
-                              else if (meta.fallback_model && meta.fallback_model.includes('qwen2')) fbName = 'Qwen2.5 Local';
-                              else if (meta.fallback_model && meta.fallback_model.includes('qwen3')) fbName = 'Qwen3 Local';
-                              else if (meta.fallback_provider === 'rule_based') fbName = 'Rule-based';
+                              const origName = modelDisplayName(meta.provider, meta.model);
+                              const fbName = modelDisplayName(meta.fallback_provider, meta.fallback_model);
                               return `⚠️ Fallback: ${origName} → ${fbName}`;
                             }
-                            if (meta.provider === 'gemini') return '⚡ Gemini 2.5 Flash';
+                            if (meta.provider === 'gemini') return `⚡ ${modelDisplayName(meta.provider, meta.model)}`;
                             if (meta.provider === 'ollama') {
-                              if (meta.model && meta.model.includes('qwen2')) return '🖥️ Qwen2.5 Local';
-                              if (meta.model && meta.model.includes('qwen3')) return '🖥️ Qwen3 Local';
-                              return `🖥️ ${meta.model} Local`;
+                              return `🖥️ ${modelDisplayName(meta.provider, meta.model)}`;
                             }
                             return `⚡ ${meta.model}`;
                           })()}

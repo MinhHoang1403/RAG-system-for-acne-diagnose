@@ -6,6 +6,7 @@ Logic for Exact Normalized Cache and safety validations.
 
 import hashlib
 import json
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -18,9 +19,11 @@ from src.observability.versioning import (
     compute_pipeline_fingerprint,
     get_answer_cache_version,
 )
+from src.quality.safe_fallback import sanitize_fallback_reason
 
 CACHE_SCHEMA_VERSION = os.getenv("CACHE_SCHEMA_VERSION", "v3")
 CACHE_PROMPT_VERSION = os.getenv("CACHE_PROMPT_VERSION", "medical_prompt_v2")
+logger = logging.getLogger(__name__)
 
 
 def infer_cache_intent(question: str, guardrail_status: str) -> str:
@@ -196,8 +199,8 @@ async def get_exact_cache(
             if isinstance(parsed.get("answer"), str):
                 parsed["answer"] = repair_mojibake(parsed["answer"])
             return parsed
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Cache lookup skipped after Redis decode/read error: %s", sanitize_fallback_reason(exc))
     return None
 
 async def set_answer_cache(
@@ -249,9 +252,7 @@ async def set_answer_cache(
     
     try:
         await redis.setex(cache_key, ttl_seconds, json.dumps(data, ensure_ascii=False))
-        import logging
-        logging.getLogger(__name__).info(f"Successfully cached answer for {cache_key}")
+        logger.info("Successfully cached answer for key=%s", cache_key)
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Failed to cache answer: {e}")
+        logger.error("Failed to cache answer: %s", sanitize_fallback_reason(e))
         pass

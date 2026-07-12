@@ -7,6 +7,8 @@ import os
 import logging
 from typing import Optional
 
+from src.quality.safe_fallback import sanitize_fallback_reason
+
 try:
     import redis.asyncio as redis
     REDIS_AVAILABLE = True
@@ -38,7 +40,10 @@ async def get_redis() -> Optional['redis.Redis']:
             # Ping to verify connection
             await _redis_client.ping()
         except Exception as e:
-            logger.warning(f"Could not connect to Redis: {e}. Cache will be disabled.")
+            logger.warning(
+                "Could not connect to Redis: %s. Cache will be disabled.",
+                sanitize_fallback_reason(e),
+            )
             _redis_client = None
             
     return _redis_client
@@ -50,7 +55,7 @@ async def close_redis():
         try:
             await _redis_client.close()
         except Exception as e:
-            logger.warning(f"Error closing Redis: {e}")
+            logger.warning("Error closing Redis: %s", sanitize_fallback_reason(e))
         _redis_client = None
 
 async def ping_redis() -> bool:

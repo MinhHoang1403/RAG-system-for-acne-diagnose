@@ -8,6 +8,7 @@ from typing import Any
 
 from src.agent.state import ClinicalState
 from src.quality.answer_verifier import apply_answer_guard
+from src.quality.safe_fallback import sanitize_fallback_reason
 from src.quality.severity_guard import apply_severity_aware_answer_guard
 from src.retrieval.contracts import PackedContext, RetrievalTrace
 from src.retrieval.query_normalization import normalize_query
@@ -97,7 +98,8 @@ async def answer_quality_node(state: ClinicalState) -> dict[str, Any]:
             "severity_guard_cache_eligible": severity_guard.cache_eligible,
         }
     except Exception as exc:
-        logger.warning("Answer quality verifier failed safely: %s", exc)
+        safe_error = sanitize_fallback_reason(exc)
+        logger.warning("Answer quality verifier failed safely: %s", safe_error)
         return {
             "answer_quality_report": {
                 "passed": False,
@@ -108,7 +110,7 @@ async def answer_quality_node(state: ClinicalState) -> dict[str, Any]:
                     {
                         "code": "answer_verifier_runtime_error",
                         "severity": "warning",
-                        "message": str(exc),
+                        "message": safe_error,
                         "evidence": {},
                         "suggested_fix": None,
                     }
