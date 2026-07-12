@@ -40,6 +40,7 @@ from src.retrieval.reranker import (
     rerank_provider_from_env,
     rerank_top_n_from_env,
 )
+from src.quality.safe_fallback import sanitize_fallback_reason
 from src.resilience.contracts import runtime_resilience_settings_from_env
 
 # Phase 1.5 — Dermatology-aware query boost
@@ -356,7 +357,7 @@ class HybridRetriever:
                 limit=8,
             )
         except Exception as exc:
-            warning = f"Entity retrieval skipped: {exc}"
+            warning = f"Entity retrieval skipped: {sanitize_fallback_reason(exc)}"
             warnings.append(warning)
             logger.warning(warning)
         t_entity = time.time() - t_entity_start
@@ -658,15 +659,15 @@ class HybridRetriever:
         try:
             await self._vector_store.close()
         except Exception as exc:
-            logger.warning("Error closing vector store: %s", exc)
+            logger.warning("Error closing vector store: %s", sanitize_fallback_reason(exc))
         try:
             await self._graph_store.close()
         except Exception as exc:
-            logger.warning("Error closing graph store: %s", exc)
+            logger.warning("Error closing graph store: %s", sanitize_fallback_reason(exc))
         try:
             await self._entity_retriever.close()
         except Exception as exc:
-            logger.warning("Error closing entity retriever: %s", exc)
+            logger.warning("Error closing entity retriever: %s", sanitize_fallback_reason(exc))
 
 
 def _candidates_for_packed_items(merged_candidates: list[Any], packed_context: Any) -> list[Any]:

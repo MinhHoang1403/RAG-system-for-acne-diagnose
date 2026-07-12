@@ -20,6 +20,7 @@ import os
 from typing import Any
 
 from src.database.neo4j_queries import ENTITY_CONTEXT_CYPHER, KEYWORD_SEARCH_CYPHER
+from src.quality.safe_fallback import sanitize_fallback_reason
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,7 @@ class Neo4jGraphStore:
                         seen_entities.add(entity)
 
         except Exception as exc:
-            logger.error("Neo4j get_entity_context failed: %s", exc)
+            logger.error("Neo4j get_entity_context failed: %s", sanitize_fallback_reason(exc))
 
         logger.debug(
             "Neo4j: queried %d entity names → %d facts",
@@ -177,11 +178,11 @@ class Neo4jGraphStore:
                     facts.append(dict(record))
 
         except Exception as exc:
-            logger.error("Neo4j keyword search failed: %s", exc)
+            logger.error("Neo4j keyword search failed: %s", sanitize_fallback_reason(exc))
 
         logger.debug(
-            "Neo4j: keyword search %s → %d facts",
-            keywords[:5],
+            "Neo4j: keyword search with %d sanitized keywords → %d facts",
+            len(keywords),
             len(facts),
         )
 

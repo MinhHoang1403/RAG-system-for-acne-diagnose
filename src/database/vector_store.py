@@ -235,7 +235,7 @@ class QdrantVectorStore(VectorStore):
             using="dense",
             limit=top_k,
         )
-        return [{"id": r.id, "score": r.score, **r.payload} for r in response.points]
+        return [{"id": r.id, "score": r.score, **(r.payload or {})} for r in response.points]
 
     async def search_sparse(
         self, text: str, top_k: int = 5,
@@ -262,7 +262,7 @@ class QdrantVectorStore(VectorStore):
             using="bm25",
             limit=top_k,
         )
-        return [{"id": r.id, "score": r.score, **r.payload} for r in response.points]
+        return [{"id": r.id, "score": r.score, **(r.payload or {})} for r in response.points]
 
     async def delete(self, id: str) -> None:
         from qdrant_client.models import PointIdsList  # type: ignore[import]
