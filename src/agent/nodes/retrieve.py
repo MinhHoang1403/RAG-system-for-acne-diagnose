@@ -36,7 +36,7 @@ def _runtime_budget(state: ClinicalState, settings: RuntimeResilienceSettings) -
 async def normalize_question_node(state: ClinicalState) -> dict:
     """Normalize the user's question (e.g., lowercasing, stripping)."""
     question = state.get("user_question", "").strip()
-    logger.debug(f"Normalizing question: {question}")
+    logger.debug("Normalizing question: chars=%d", len(question))
     
     # Simple normalization for Phase 2 (can be upgraded to LLM rewriting later)
     normalized = question.lower()
@@ -126,13 +126,16 @@ Câu hỏi độc lập:
         )
         
         rewritten = response_data["text"].strip()
-        logger.info(f"Rewrote question to: {rewritten}")
+        logger.info("Rewrote question using conversation history: chars=%d", len(rewritten))
         return {
             "standalone_question": rewritten,
             "use_history_context": True,
         }
     except Exception as e:
-        logger.error(f"Failed to rewrite question, using original. Error: {e}")
+        logger.error(
+            "Failed to rewrite question, using original. Error: %s",
+            sanitize_fallback_reason(e),
+        )
         return {
             "standalone_question": normalized,
             "use_history_context": True,
@@ -181,7 +184,7 @@ async def retrieve_context_node(state: ClinicalState) -> dict:
             "retrieval_error": None,
         }
         
-    logger.info(f"Retrieving context for query: {query}")
+    logger.info("Retrieving context: query_chars=%d", len(str(query)))
     
     retriever = HybridRetriever()
     try:

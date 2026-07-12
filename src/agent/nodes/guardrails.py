@@ -12,6 +12,7 @@ from src.agent.llm.provider import generate_llm_response
 from src.agent.state import ClinicalState
 from src.resilience.budget import DeadlineBudget
 from src.resilience.contracts import RuntimeResilienceSettings, runtime_resilience_settings_from_env
+from src.quality.safe_fallback import sanitize_fallback_reason
 
 logger = logging.getLogger(__name__)
 
@@ -316,7 +317,10 @@ Câu hỏi cần phân loại:
             }
             
     except Exception as e:
-        logger.error(f"Guardrail failed ({e}). Defaulting to safe fallback (in_domain).")
+        logger.error(
+            "Guardrail failed (%s). Defaulting to safe fallback (in_domain).",
+            sanitize_fallback_reason(e),
+        )
         # Safe fallback: assume in-domain if LLM fails, safety checks later might catch some issues
         # Or simple rule check
         keyword_fallback = any(k in query.lower() for k in ["mụn", "acne", "da", "sẹo", "skincare", "rửa mặt", "tác dụng phụ", "bôi", "uống", "thuốc", "loại đó", "cái đó", "cách dùng", "điều trị"])
