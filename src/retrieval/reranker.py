@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from src.knowledge.normalizer import normalize_text_key
+from src.quality.safe_fallback import sanitize_fallback_reason
 from src.retrieval.contracts import (
     NormalizedQuery,
     QueryExpansion,
@@ -82,7 +83,7 @@ def rerank_candidates(
             timeout_seconds=timeout_seconds,
         )
     except Exception as exc:
-        warning = f"local_rules failed; using retrieval order fallback: {exc}"
+        warning = f"local_rules failed; using retrieval order fallback: {sanitize_fallback_reason(exc)}"
         warnings.append(warning)
         actual_provider = "retrieval_order"
         fallback_used = True
@@ -248,7 +249,8 @@ def _score_with_provider(
         if not allow_fallback:
             raise
         warnings.append(
-            f"{requested_provider} unavailable or failed; falling back to local_rules: {type(exc).__name__}: {exc}"
+            f"{requested_provider} unavailable or failed; falling back to local_rules: "
+            f"{type(exc).__name__}: {sanitize_fallback_reason(exc)}"
         )
         return (
             _local_rule_scores(rerank_inputs, rule_normalized),

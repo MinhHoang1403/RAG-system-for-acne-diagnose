@@ -213,6 +213,9 @@ def _ensure_source(
         if key in seen:
             continue
         item = _candidate_to_item(candidate, normalized_query)
+        if not item.text.strip():
+            dropped.append(_drop_record(candidate, "empty_text"))
+            continue
         if len(selected) >= max_items:
             replaced = selected[-1]
             dropped.append(
