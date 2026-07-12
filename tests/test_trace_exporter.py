@@ -37,3 +37,25 @@ def test_exporter_writes_jsonl_when_enabled(tmp_path):
     assert payload["safe_payload"]["api_key"] == "[REDACTED]"
     assert "truncated" in payload["safe_payload"]["context_text"]
     assert payload["summary"]["pipeline_fingerprint"]
+
+
+def test_observability_event_redacts_raw_query_and_inline_secrets():
+    query = "Tôi bị mụn gần mắt và số điện thoại 0912345678"
+    event = build_observability_event(
+        query=query,
+        result={
+            "retrieval_status": "recoverable_error",
+            "fallback_reason": "backend failed token=secret-value",
+        },
+        max_text_chars=200,
+    )
+
+    payload = event.model_dump(mode="json")
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert event.summary.query == f"[REDACTED_QUERY chars={len(query)}]"
+    assert event.query_hash
+    assert query not in serialized
+    assert "0912345678" not in serialized
+    assert "secret-value" not in serialized
+    assert "token=[REDACTED]" in serialized

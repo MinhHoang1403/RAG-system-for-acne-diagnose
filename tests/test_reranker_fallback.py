@@ -13,6 +13,14 @@ class FailingBackend:
         raise RuntimeError("semantic_inference_error")
 
 
+class SecretFailingBackend:
+    name = "secret_failing_backend"
+
+    def score_pairs(self, query, documents, *, batch_size, timeout_seconds=None):
+        del query, documents, batch_size, timeout_seconds
+        raise RuntimeError("semantic failed token=secret-value")
+
+
 def _candidate(candidate_id: str, text: str) -> RetrievedCandidate:
     return RetrievedCandidate(
         candidate_id=candidate_id,
@@ -43,6 +51,24 @@ def test_semantic_failure_falls_back_to_local_rules():
     assert trace.provider == "local_rules"
     assert trace.fallback_used is True
     assert "falling back to local_rules" in " ".join(trace.warnings)
+
+
+def test_semantic_fallback_warning_is_sanitized():
+    normalized = normalize_query("Benzoyl peroxide có phải kháng sinh không?")
+    _, trace = rerank_candidates(
+        normalized,
+        [_candidate("bp", "Benzoyl peroxide is not an antibiotic.")],
+        expand_normalized_query(normalized),
+        provider="hybrid",
+        semantic_reranker=LocalSemanticReranker(
+            SemanticRerankerConfig(model_path="fixture", allow_fallback=True),
+            backend=SecretFailingBackend(),
+        ),
+    )
+
+    warning_text = " ".join(trace.warnings)
+    assert "secret-value" not in warning_text
+    assert "token=[REDACTED]" in warning_text
 
 
 def test_unknown_provider_falls_back_to_local_rules():

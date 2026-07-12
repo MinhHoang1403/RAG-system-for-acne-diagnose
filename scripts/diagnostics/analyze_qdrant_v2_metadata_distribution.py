@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -39,13 +38,12 @@ try:
 except ImportError:
     pass
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Noisy chunk detection — uses canonical function from ingest pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
 from scripts.ingest_knowledge import is_noisy_chunk
+from src.database.vector_store import qdrant_client_kwargs
 
 
 
@@ -60,7 +58,7 @@ async def analyze(collection: str) -> int:
         print("❌ qdrant-client not installed.")
         return 1
 
-    client = AsyncQdrantClient(url=QDRANT_URL)
+    client = AsyncQdrantClient(**qdrant_client_kwargs())
 
     try:
         # Check collection

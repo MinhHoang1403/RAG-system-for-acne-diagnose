@@ -134,7 +134,7 @@ async def _run_release_readiness_agent_override(request: "ChatRequest", session_
         "cache_reason": "safe_fallback_no_retrieval_evidence" if fallback_applied else "bypassed",
         "cache_metadata": {},
         "actual_provider": "ollama" if llm_fallback_used else ("system" if fallback_applied else "gemini"),
-        "actual_model": os.getenv("OLLAMA_MODEL", "qwen3:8b") if llm_fallback_used else (None if fallback_applied else os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")),
+        "actual_model": os.getenv("OLLAMA_MODEL", "qwen3:8b") if llm_fallback_used else (None if fallback_applied else os.getenv("GOOGLE_MODEL", "gemini-3.5-flash")),
         "llm_fallback_used": llm_fallback_used,
         "fallback_provider": "ollama" if llm_fallback_used else None,
         "fallback_model": os.getenv("OLLAMA_MODEL", "qwen3:8b") if llm_fallback_used else None,
@@ -453,36 +453,67 @@ async def list_models():
     from src.agent.llm.ollama_client import list_ollama_models
     
     ollama_models = await list_ollama_models()
-    qwen25_available = "qwen2.5:latest" in ollama_models
+    gemini_model = os.getenv("GOOGLE_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
+    qwen3_8b_available = "qwen3:8b" in ollama_models
     qwen3_available = "qwen3:latest" in ollama_models
+
+    def model_entry(
+        *,
+        provider: str,
+        model_id: str,
+        display_name: str,
+        model_type: str,
+        available: bool,
+        is_default: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "provider": provider,
+            "model": model_id,
+            "model_id": model_id,
+            "label": display_name,
+            "display_name": display_name,
+            "type": model_type,
+            "available": available,
+            "is_default": is_default,
+        }
     
     return {
         "default_provider": "gemini",
-        "default_model": "gemini-2.5-flash",
+        "default_model": gemini_model,
+        "default_model_id": gemini_model,
         "models": [
-            {
-                "provider": "gemini",
-                "model": "gemini-2.5-flash",
-                "label": "Gemini 2.5 Flash",
-                "type": "cloud",
-                "available": True
-            },
-            {
-                "provider": "ollama",
-                "model": "qwen2.5:latest",
-                "label": "Qwen2.5 Local",
-                "type": "local",
-                "available": qwen25_available
-            },
-            {
-                "provider": "ollama",
-                "model": "qwen3:latest",
-                "label": "Qwen3 Local",
-                "type": "local",
-                "available": qwen3_available
-            }
+            model_entry(
+                provider="gemini",
+                model_id=gemini_model,
+                display_name=_display_name_for_model(gemini_model),
+                model_type="cloud",
+                available=True,
+                is_default=True,
+            ),
+            model_entry(
+                provider="ollama",
+                model_id="qwen3:8b",
+                display_name="Qwen3 8B Local",
+                model_type="local",
+                available=qwen3_8b_available,
+            ),
+            model_entry(
+                provider="ollama",
+                model_id="qwen3:latest",
+                display_name="Qwen3 Local",
+                model_type="local",
+                available=qwen3_available,
+            ),
         ]
     }
+
+
+def _display_name_for_model(model_id: str) -> str:
+    aliases = {
+        "gemini-3.5-flash": "Gemini 3.5 Flash",
+        "gemini-2.5-flash": "Gemini 2.5 Flash",
+    }
+    return aliases.get(model_id, model_id)
 
 @app.post("/chat", response_model=ChatResponse, response_model_exclude_none=True)
 async def chat_endpoint(request: ChatRequest):
@@ -543,7 +574,12 @@ async def chat_endpoint(request: ChatRequest):
     active_requests.add(session_id)
     
     try:
-        logger.info(f"Received message: {request.message}")
+        logger.info(
+            "Received chat request for session=%s, user_id_present=%s, message_chars=%d",
+            session_id,
+            bool(request.user_id),
+            len(request.message),
+        )
         if _release_readiness_test_mode_enabled():
             result = await _run_release_readiness_agent_override(request, session_id)
         else:
@@ -566,9 +602,9 @@ async def chat_endpoint(request: ChatRequest):
             if not result.get("answer"):
                  raise Exception("Agent failed to produce an answer.")
         
-        model_name = os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
+        model_name = os.getenv("GOOGLE_MODEL", "gemini-3.5-flash")
         if model_name == "gemini-1.5-flash":
-            model_name = "gemini-2.5-flash"
+            model_name = "gemini-3.5-flash"
             
         raw_graph_facts = result.get("graph_facts", [])
         
@@ -739,7 +775,7 @@ async def chat_endpoint(request: ChatRequest):
             logger.info("Skipping DB persistence in release-readiness test mode.")
         else:
             try:
-                print(f"[PERSIST] Attempting to persist chat for session {session_id}")
+                logger.debug("Persisting chat exchange for session %s", session_id)
                 await _persist_chat_to_db(
                     session_id=session_id,
                     user_id=request.user_id,
@@ -751,10 +787,13 @@ async def chat_endpoint(request: ChatRequest):
                     graph_facts=safe_graph_facts,
                     db_metadata=safe_db_metadata,
                 )
-                print(f"[PERSIST] ✓ Chat persisted successfully for session {session_id}")
+                logger.debug("Chat exchange persisted for session %s", session_id)
             except Exception as db_err:
-                print(f"[PERSIST] ✗ Failed to persist chat: {db_err}")
-                logger.warning(f"Failed to persist chat to DB (non-fatal): {db_err}")
+                logger.warning(
+                    "Failed to persist chat to DB for session %s (non-fatal): %s",
+                    session_id,
+                    db_err,
+                )
         
         return ChatResponse(
             answer=answer_text,
@@ -834,18 +873,15 @@ async def _persist_chat_to_db(
     
     db_session = await _get_db_session()
     if db_session is None:
-        print("[PERSIST] DB session is None — skipping")
-        logger.warning("DB unavailable — skipping chat persistence.")
+        logger.warning("DB unavailable; skipping chat persistence for session %s.", session_id)
         return
     
-    print(f"[PERSIST] Got DB session, beginning transaction...")
     try:
         async with db_session.begin():
             # Create title from first 40 chars of user message
             title = user_message[:40] + ("..." if len(user_message) > 40 else "")
             
             # Upsert session
-            print(f"[PERSIST] Creating/updating session {session_id}")
             await repo.create_or_update_session(
                 session=db_session,
                 session_id=session_id,
@@ -854,7 +890,6 @@ async def _persist_chat_to_db(
             )
             
             # Save user message
-            print(f"[PERSIST] Saving user message")
             await repo.save_message(
                 session=db_session,
                 session_id=session_id,
@@ -863,7 +898,6 @@ async def _persist_chat_to_db(
             )
             
             # Save assistant message
-            print(f"[PERSIST] Saving assistant message")
             await repo.save_message(
                 session=db_session,
                 session_id=session_id,
@@ -879,13 +913,9 @@ async def _persist_chat_to_db(
             # Touch session updated_at
             await repo.touch_session(session=db_session, session_id=session_id)
         
-        print(f"[PERSIST] ✓ Transaction committed for session {session_id}")
-        logger.info(f"Chat persisted to DB for session {session_id}")
+        logger.debug("Chat persisted to DB for session %s", session_id)
     except Exception as e:
-        print(f"[PERSIST] ✗ DB persistence error: {e}")
-        import traceback
-        traceback.print_exc()
-        logger.warning(f"DB persistence error: {e}")
+        logger.warning("DB persistence error for session %s: %s", session_id, e)
         raise
     finally:
         await db_session.close()

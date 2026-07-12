@@ -33,13 +33,13 @@ def _resolve_cache_model_key(state: ClinicalState) -> tuple[str, str]:
     model = state.get("llm_model")
 
     if provider == "gemini":
-        resolved = model or os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
+        resolved = model or os.getenv("GOOGLE_MODEL", "gemini-3.5-flash")
         if resolved == "gemini-1.5-flash":
-            resolved = "gemini-2.5-flash"
+            resolved = "gemini-3.5-flash"
         return provider, resolved
 
     if provider in {"ollama", "local"}:
-        resolved = model or os.getenv("OLLAMA_MODEL", "qwen2.5")
+        resolved = model or os.getenv("OLLAMA_MODEL", "qwen3:8b")
         if ":" not in resolved:
             resolved = f"{resolved}:latest"
         return "ollama", resolved
@@ -75,7 +75,11 @@ async def cache_lookup_node(state: ClinicalState) -> dict[str, Any]:
         target_question = user_question
         cache_key_source = "user_question"
     
-    logger.info(f"Cache key source: {cache_key_source} -> '{target_question[:80]}...'")
+    logger.info(
+        "Cache key source=%s, question_chars=%d",
+        cache_key_source,
+        len(target_question),
+    )
     normalized = normalize_question(target_question)
     guard_status = "in_domain" if state.get("is_in_domain") else "out_of_domain"
     intent = infer_cache_intent(target_question, guard_status)
@@ -268,7 +272,11 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
         return {}
         
     if state.get("errors") or state.get("llm_fallback"):
-        logger.info(f"Cache store SKIPPED: errors={state.get('errors')}, llm_fallback={state.get('llm_fallback')}")
+        logger.info(
+            "Cache store SKIPPED: error_count=%d, llm_fallback=%s",
+            len(state.get("errors") or []),
+            state.get("llm_fallback"),
+        )
         return {}
         
     # Use final_answer (post-processed by finalize_response_node) instead of draft_answer
@@ -423,7 +431,11 @@ async def cache_store_node(state: ClinicalState) -> dict[str, Any]:
     
     # Store it
     cache_provider, cache_model = _resolve_cache_model_key(state)
-    logger.info(f"Storing cache: key_source={'standalone' if is_vague_followup else 'user'}, normalized='{normalized[:60]}...'")
+    logger.info(
+        "Storing answer cache: key_source=%s, normalized_chars=%d",
+        "standalone" if is_vague_followup else "user",
+        len(normalized),
+    )
     await set_answer_cache(
         normalized_question=normalized,
         standalone_question=target_question,

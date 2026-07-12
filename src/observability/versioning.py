@@ -41,7 +41,7 @@ def build_pipeline_version_manifest(settings: Mapping[str, Any] | None = None) -
     manifest = {
         "phase": "phase2e",
         "retrieval_pipeline_version": value("RETRIEVAL_PIPELINE_VERSION", "retrieval_pipeline_v2"),
-        "context_packer_version": value("CONTEXT_PACKER_VERSION", "context_packer_v2"),
+        "context_packer_version": value("CONTEXT_PACKER_VERSION", "context_packer_v3"),
         "reranker_version": value("RERANKER_VERSION", DEFAULT_RERANKER_VERSION),
         "answer_verifier_version": value("ANSWER_VERIFIER_VERSION", "answer_verifier_v2"),
         "severity_guard_version": value("SEVERITY_GUARD_VERSION", "severity_aware_answer_guard_v1"),
@@ -69,6 +69,8 @@ def build_pipeline_version_manifest(settings: Mapping[str, Any] | None = None) -
         "rerank_enabled": _env_bool(value("RERANK_ENABLED", "true"), default=True),
         "rerank_provider": value("RERANK_PROVIDER", "local_rules") or "local_rules",
         "rerank_top_n": _env_int(value("RERANK_TOP_N", "8"), default=8),
+        "retrieval_context_max_items": _env_int(value("RETRIEVAL_CONTEXT_MAX_ITEMS", "5"), default=5),
+        "retrieval_context_max_chars": _env_int(value("RETRIEVAL_CONTEXT_MAX_CHARS", "4200"), default=4200),
         "semantic_rerank_model_identifier": _semantic_model_identifier(
             value("SEMANTIC_RERANK_MODEL_PATH", "")
         ),
@@ -151,6 +153,8 @@ def pipeline_manifest_summary(manifest: dict[str, Any] | None = None) -> dict[st
         "rerank_enabled",
         "rerank_provider",
         "rerank_top_n",
+        "retrieval_context_max_items",
+        "retrieval_context_max_chars",
         "semantic_rerank_model_identifier",
         "semantic_rerank_max_candidates",
         "answer_verifier_enabled",

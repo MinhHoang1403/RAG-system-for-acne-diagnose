@@ -9,6 +9,7 @@ import time
 import sys
 
 API_URL = "http://127.0.0.1:8000"
+OLLAMA_MODEL = "qwen3:8b"
 
 def test_redis_cache():
     print("--- Testing Redis Semantic Cache ---")
@@ -33,7 +34,7 @@ def test_redis_cache():
     payload1 = {
         "message": question,
         "llm_provider": "ollama",
-        "llm_model": "qwen2.5:latest",
+        "llm_model": OLLAMA_MODEL,
         "allow_model_fallback": False
     }
     
@@ -82,7 +83,7 @@ def test_redis_cache():
     payload_personal = {
         "message": "Tôi đang mang thai và bị mụn viêm, có dùng benzoyl peroxide được không?",
         "llm_provider": "ollama",
-        "llm_model": "qwen2.5:latest",
+        "llm_model": OLLAMA_MODEL,
         "session_id": str(unique_id)
     }
     res3 = httpx.post(f"{API_URL}/chat", json=payload_personal, timeout=60).json()
@@ -99,7 +100,7 @@ def test_redis_cache():
     payload_ood = {
         "message": "Thời tiết hôm nay thế nào?",
         "llm_provider": "ollama",
-        "llm_model": "qwen2.5:latest",
+        "llm_model": OLLAMA_MODEL,
         "session_id": str(unique_id)
     }
     res4 = httpx.post(f"{API_URL}/chat", json=payload_ood, timeout=60).json()
@@ -116,7 +117,7 @@ def test_redis_cache():
     payload_short = {
         "message": "Chỉ trả lời đúng 1 chữ: Có",
         "llm_provider": "ollama",
-        "llm_model": "qwen2.5:latest",
+        "llm_model": OLLAMA_MODEL,
         "session_id": str(unique_id)
     }
     httpx.post(f"{API_URL}/chat", json=payload_short, timeout=60)

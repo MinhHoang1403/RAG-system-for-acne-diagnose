@@ -40,6 +40,7 @@ from src.retrieval.reranker import (
     rerank_provider_from_env,
     rerank_top_n_from_env,
 )
+from src.quality.safe_fallback import sanitize_fallback_reason
 from src.resilience.contracts import runtime_resilience_settings_from_env
 
 # Phase 1.5 — Dermatology-aware query boost
@@ -111,6 +112,29 @@ def prioritize_main_contexts(results: list[dict[str, Any]], top_k: int) -> list[
     if len(selected) < top_k:
         selected.extend(reference_contexts[: top_k - len(selected)])
     return selected
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int | None = None) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def _rerank_timeout_within_retrieval_budget() -> float:
+    settings = runtime_resilience_settings_from_env()
+    rerank_timeout = float(settings.rerank_timeout_seconds)
+    retrieval_timeout = float(settings.retrieval_timeout_seconds)
+    if retrieval_timeout <= 1:
+        return max(0.1, min(rerank_timeout, retrieval_timeout))
+    # Reranker must time out before the enclosing retrieval stage so fallback
+    # can preserve a 200 response instead of leaking a retrieval-level 504.
+    budgeted_timeout = max(1.0, retrieval_timeout * 0.5)
+    return max(0.1, min(rerank_timeout, budgeted_timeout))
 
 
 def extract_query_dermatology_metadata(query: str) -> dict[str, Any]:
@@ -356,7 +380,7 @@ class HybridRetriever:
                 limit=8,
             )
         except Exception as exc:
-            warning = f"Entity retrieval skipped: {exc}"
+            warning = f"Entity retrieval skipped: {sanitize_fallback_reason(exc)}"
             warnings.append(warning)
             logger.warning(warning)
         t_entity = time.time() - t_entity_start
@@ -369,7 +393,7 @@ class HybridRetriever:
         )
         t_rerank_start = time.time()
         rerank_top_n = rerank_top_n_from_env(default=max(top_k * 2, 8))
-        rerank_timeout_seconds = runtime_resilience_settings_from_env().rerank_timeout_seconds
+        rerank_timeout_seconds = _rerank_timeout_within_retrieval_budget()
         if rerank_enabled_from_env():
             try:
                 reranked_candidates, rerank_trace = await asyncio.wait_for(
@@ -415,11 +439,13 @@ class HybridRetriever:
         warnings.extend(rerank_trace.warnings)
 
         t_pack_start = time.time()
+        context_max_items = _env_int("RETRIEVAL_CONTEXT_MAX_ITEMS", 5, minimum=3, maximum=10)
+        context_max_chars = _env_int("RETRIEVAL_CONTEXT_MAX_CHARS", 4200, minimum=1200, maximum=12000)
         packed_context = pack_context(
             normalized_query=normalized_query,
             merged_candidates=reranked_candidates,
-            max_items=max(top_k, 5),
-            max_chars=6000,
+            max_items=min(max(top_k, 5), context_max_items),
+            max_chars=context_max_chars,
         )
         t_pack = time.time() - t_pack_start
         selected_candidates = _candidates_for_packed_items(reranked_candidates, packed_context)
@@ -658,15 +684,15 @@ class HybridRetriever:
         try:
             await self._vector_store.close()
         except Exception as exc:
-            logger.warning("Error closing vector store: %s", exc)
+            logger.warning("Error closing vector store: %s", sanitize_fallback_reason(exc))
         try:
             await self._graph_store.close()
         except Exception as exc:
-            logger.warning("Error closing graph store: %s", exc)
+            logger.warning("Error closing graph store: %s", sanitize_fallback_reason(exc))
         try:
             await self._entity_retriever.close()
         except Exception as exc:
-            logger.warning("Error closing entity retriever: %s", exc)
+            logger.warning("Error closing entity retriever: %s", sanitize_fallback_reason(exc))
 
 
 def _candidates_for_packed_items(merged_candidates: list[Any], packed_context: Any) -> list[Any]:

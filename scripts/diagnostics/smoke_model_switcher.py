@@ -72,11 +72,11 @@ async def main():
     # 2. Test Gemini
     resp1 = await test_chat_endpoint("gemini", "gemini-2.5-flash", False, query=base_query)
     
-    # 3. Test Qwen2.5
-    if availability.get("ollama/qwen2.5:latest"):
-        await test_chat_endpoint("ollama", "qwen2.5:latest", False, query=base_query)
+    # 3. Test Qwen3 local model
+    if availability.get("ollama/qwen3:8b"):
+        await test_chat_endpoint("ollama", "qwen3:8b", False, query=base_query)
     else:
-        print("\nSkipping Qwen2.5 test because it's marked unavailable in /models.")
+        print("\nSkipping Qwen3 8B test because it's marked unavailable in /models.")
 
     # 4. Test Qwen3
     if availability.get("ollama/qwen3:latest"):

@@ -43,15 +43,15 @@ thế bác sĩ da liễu hoặc chuyên gia y tế.
 
 Checkpoint ổn định:
 
-- Tag: `system-pre-ui-verified-pass`
-- Commit: `da63b22`
+- Tag: `phase1-phase2-hardening-final-pass`
+- Commit: `387cc90`
 
 | Khu vực | Trạng thái | Nội dung chính | Script xác minh |
 |---|---|---|---|
 | Phase 1 | Đã triển khai và xác minh | Ingestion PDF/JSON, chunk collection, entity cards, deterministic Neo4j graph, ingestion manifest | `scripts/validate_phase1_complete.py`, `scripts/eval_phase1_readiness.py` |
 | Phase 2A | Đã triển khai và xác minh | Entity-aware query normalization, taxonomy expansion, entity retrieval, chunk metadata boosting | `scripts/eval_phase2_retrieval.py` |
 | Phase 2B | Đã triển khai và xác minh | Intent-aware context packing cho entity cards và evidence chunks | `scripts/eval_phase2_context_packing.py` |
-| Phase 2C | Đã triển khai và xác minh | Deterministic local reranker với `RERANK_PROVIDER=local_rules` | `scripts/eval_phase2_reranking.py` |
+| Phase 2C | Đã triển khai và xác minh | Hybrid reranker với semantic local model khi được provision và fallback deterministic local rules | `scripts/eval_phase2_reranking.py`, `scripts/eval_semantic_reranker.py` |
 | Phase 2D | Đã triển khai và xác minh | Answer Quality Verifier, Vietnamese negation/proposition hardening và answer guard dựa trên quy tắc | `scripts/eval_phase2_answer_quality.py`, `scripts/smoke_phase2_runtime.py --mode offline` |
 | Phase 2E | Đã triển khai và xác minh | Cache versioning, pipeline fingerprint, observability đã sanitize, debug report | `scripts/inspect_cache_versions.py`, `scripts/generate_phase2_debug_report.py` |
 | Phase 2F | Đã triển khai và xác minh | Severity-aware answer guard phân loại `routine`, `caution`, `urgent`, `emergency` để định tuyến cảnh báo an toàn y khoa | `scripts/eval_severity_aware_guard.py` |
@@ -68,8 +68,8 @@ Checkpoint ổn định:
 - Tách riêng chunk collection và entity collection trong Qdrant.
 - Metadata boosting theo các trường chuyên biệt của miền da liễu/mụn.
 - Candidate merge giữa entity cards và evidence chunks.
-- Deterministic local reranking qua `RERANK_PROVIDER=local_rules`, kèm contract
-  provider cho semantic reranker local-only và hybrid fallback.
+- Hybrid reranking qua `RERANK_PROVIDER=hybrid`, dùng semantic local model khi
+  `SEMANTIC_RERANK_MODEL_PATH` hợp lệ và fallback deterministic local rules.
 - Intent-aware context packing trước bước generation.
 - LangGraph runtime gồm cache lookup, guardrail, retrieval, generation,
   answer verification, cache store và observability export tùy chọn.
@@ -152,9 +152,9 @@ và package `src/retrieval/`:
 7. Query-adaptive dermatology metadata boost.
 8. Entity-card retrieval từ `ENTITY_QDRANT_COLLECTION_NAME`.
 9. Candidate merge giữa entity candidates và chunk candidates.
-10. Reranking qua provider contract. Default runtime là deterministic
-    `local_rules`; semantic/hybrid chỉ dùng local model nếu được provision bằng
-    `SEMANTIC_RERANK_MODEL_PATH`.
+10. Reranking qua provider contract. Default runtime hiện tại là `hybrid`;
+    semantic reranker chỉ dùng local model nếu được provision bằng
+    `SEMANTIC_RERANK_MODEL_PATH`, và fallback về local rules khi được phép.
 11. Intent-aware context packing.
 12. Neo4j 1-hop graph enrichment.
 13. Prompt generation, answer quality verification, cache store và observability
@@ -167,7 +167,7 @@ Runtime đã xác minh đang dùng:
 
 ## Trạng thái knowledge base hiện tại
 
-Trạng thái đã xác minh tại tag `system-pre-ui-verified-pass`:
+Trạng thái đã xác minh tại tag `phase1-phase2-hardening-final-pass`:
 
 | Thành phần | Trạng thái đã xác minh |
 |---|---|
@@ -361,7 +361,7 @@ bạn muốn chạy. Không commit `.env`.
 | LLM resilience | `LLM_RETRY_BASE_DELAY_SECONDS` | `1` |
 | LLM resilience | `LLM_RETRY_MAX_DELAY_SECONDS` | `4` |
 | LLM | `OLLAMA_BASE_URL` | `http://localhost:11434` |
-| LLM | `OLLAMA_MODEL` | `.env.example`: `qwen2.5` |
+| LLM | `OLLAMA_MODEL` | `.env.example`: `qwen3:8b` |
 | Runtime resilience | `AGENT_TOTAL_TIMEOUT_SECONDS` | `120` |
 | Runtime resilience | `RETRIEVAL_TIMEOUT_SECONDS` | `20` |
 | Runtime resilience | `NEO4J_TIMEOUT_SECONDS` | `10` |
@@ -371,9 +371,9 @@ bạn muốn chạy. Không commit `.env`.
 | Runtime resilience | `CIRCUIT_BREAKER_RECOVERY_SECONDS` | `60` |
 | Runtime resilience | `CIRCUIT_BREAKER_HALF_OPEN_MAX_CALLS` | `1` |
 | Rerank | `RERANK_ENABLED` | `true` |
-| Rerank | `RERANK_PROVIDER` | `local_rules` |
+| Rerank | `RERANK_PROVIDER` | `hybrid` |
 | Rerank | `RERANK_TOP_N` | `8` |
-| Rerank | `SEMANTIC_RERANK_MODEL_PATH` | rỗng, không tự download model |
+| Rerank | `SEMANTIC_RERANK_MODEL_PATH` | đường dẫn local, không tự download model |
 | Rerank | `SEMANTIC_RERANK_ALLOW_FALLBACK` | `true` |
 | Answer guard | `ANSWER_VERIFIER_ENABLED` | `true` |
 | Answer guard | `ANSWER_GUARD_MODE` | `metadata_only` |
@@ -816,19 +816,19 @@ Google GenAI SDK:
 
 Snapshot tại thời điểm README được cập nhật:
 
-- Tag: `system-pre-ui-verified-pass`
-- Commit: `da63b22`
+- Tag: `phase1-phase2-hardening-final-pass`
+- Commit: `387cc90`
 - Phase 1 validation: PASS
-- Phase 2 all-eval: PASS 9/9
+- Phase 2 all-eval: PASS 11/11
 - Offline runtime smoke: PASS 8/8
-- Pytest: 141 passed, 1 warning
+- Pytest: 393 passed
 - Frontend lint: PASS
 - Frontend build: PASS
 - Qdrant `acne_knowledge`: 641 points
 - Qdrant `acne_entities_v1`: 20 points
 - Neo4j deterministic graph: 21 nodes, 15 relationships
 - Cache answer version: `v5`
-- Rerank provider: `local_rules`
+- Rerank provider: `hybrid`
 - Answer guard default: `metadata_only`
 
 Sau khi đổi code hoặc cấu hình, nên chạy lại:

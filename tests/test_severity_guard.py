@@ -203,7 +203,7 @@ def test_cache_model_key_resolution_variants(monkeypatch):
 
     assert cache_node._resolve_cache_model_key({"llm_provider": "gemini"}) == (
         "gemini",
-        "gemini-2.5-flash",
+        "gemini-3.5-flash",
     )
     assert cache_node._resolve_cache_model_key({"llm_provider": "local", "llm_model": "qwen3"}) == (
         "ollama",
@@ -544,7 +544,7 @@ async def test_answer_quality_node_disabled_and_runtime_error(monkeypatch):
     monkeypatch.setenv("ANSWER_VERIFIER_ENABLED", "true")
 
     def raise_error(query):
-        raise RuntimeError("normalization failed")
+        raise RuntimeError("normalization failed token=secret-value")
 
     monkeypatch.setattr(quality_node, "normalize_query", raise_error)
     failed = await quality_node.answer_quality_node(
@@ -554,3 +554,5 @@ async def test_answer_quality_node_disabled_and_runtime_error(monkeypatch):
     assert disabled == {"answer_quality_report": None, "answer_guard_modified": False}
     assert failed["answer_quality_report"]["passed"] is False
     assert failed["answer_quality_report"]["issues"][0]["code"] == "answer_verifier_runtime_error"
+    assert "secret-value" not in failed["answer_quality_report"]["issues"][0]["message"]
+    assert "token=[REDACTED]" in failed["answer_quality_report"]["issues"][0]["message"]
