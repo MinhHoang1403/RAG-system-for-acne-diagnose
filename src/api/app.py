@@ -543,7 +543,12 @@ async def chat_endpoint(request: ChatRequest):
     active_requests.add(session_id)
     
     try:
-        logger.info(f"Received message: {request.message}")
+        logger.info(
+            "Received chat request for session=%s, user_id_present=%s, message_chars=%d",
+            session_id,
+            bool(request.user_id),
+            len(request.message),
+        )
         if _release_readiness_test_mode_enabled():
             result = await _run_release_readiness_agent_override(request, session_id)
         else:
@@ -739,7 +744,7 @@ async def chat_endpoint(request: ChatRequest):
             logger.info("Skipping DB persistence in release-readiness test mode.")
         else:
             try:
-                print(f"[PERSIST] Attempting to persist chat for session {session_id}")
+                logger.debug("Persisting chat exchange for session %s", session_id)
                 await _persist_chat_to_db(
                     session_id=session_id,
                     user_id=request.user_id,
@@ -751,10 +756,13 @@ async def chat_endpoint(request: ChatRequest):
                     graph_facts=safe_graph_facts,
                     db_metadata=safe_db_metadata,
                 )
-                print(f"[PERSIST] ✓ Chat persisted successfully for session {session_id}")
+                logger.debug("Chat exchange persisted for session %s", session_id)
             except Exception as db_err:
-                print(f"[PERSIST] ✗ Failed to persist chat: {db_err}")
-                logger.warning(f"Failed to persist chat to DB (non-fatal): {db_err}")
+                logger.warning(
+                    "Failed to persist chat to DB for session %s (non-fatal): %s",
+                    session_id,
+                    db_err,
+                )
         
         return ChatResponse(
             answer=answer_text,
@@ -834,18 +842,15 @@ async def _persist_chat_to_db(
     
     db_session = await _get_db_session()
     if db_session is None:
-        print("[PERSIST] DB session is None — skipping")
-        logger.warning("DB unavailable — skipping chat persistence.")
+        logger.warning("DB unavailable; skipping chat persistence for session %s.", session_id)
         return
     
-    print(f"[PERSIST] Got DB session, beginning transaction...")
     try:
         async with db_session.begin():
             # Create title from first 40 chars of user message
             title = user_message[:40] + ("..." if len(user_message) > 40 else "")
             
             # Upsert session
-            print(f"[PERSIST] Creating/updating session {session_id}")
             await repo.create_or_update_session(
                 session=db_session,
                 session_id=session_id,
@@ -854,7 +859,6 @@ async def _persist_chat_to_db(
             )
             
             # Save user message
-            print(f"[PERSIST] Saving user message")
             await repo.save_message(
                 session=db_session,
                 session_id=session_id,
@@ -863,7 +867,6 @@ async def _persist_chat_to_db(
             )
             
             # Save assistant message
-            print(f"[PERSIST] Saving assistant message")
             await repo.save_message(
                 session=db_session,
                 session_id=session_id,
@@ -879,13 +882,9 @@ async def _persist_chat_to_db(
             # Touch session updated_at
             await repo.touch_session(session=db_session, session_id=session_id)
         
-        print(f"[PERSIST] ✓ Transaction committed for session {session_id}")
-        logger.info(f"Chat persisted to DB for session {session_id}")
+        logger.debug("Chat persisted to DB for session %s", session_id)
     except Exception as e:
-        print(f"[PERSIST] ✗ DB persistence error: {e}")
-        import traceback
-        traceback.print_exc()
-        logger.warning(f"DB persistence error: {e}")
+        logger.warning("DB persistence error for session %s: %s", session_id, e)
         raise
     finally:
         await db_session.close()
