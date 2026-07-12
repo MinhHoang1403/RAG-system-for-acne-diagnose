@@ -8,6 +8,8 @@ import logging
 import os
 import httpx
 
+from src.quality.safe_fallback import sanitize_fallback_reason
+
 logger = logging.getLogger(__name__)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -23,7 +25,7 @@ async def list_ollama_models(timeout_seconds: float | None = None) -> list[str]:
             models = [model.get("name") for model in data.get("models", [])]
             return models
     except Exception as e:
-        logger.warning(f"Could not connect to Ollama to list models: {e}")
+        logger.warning("Could not connect to Ollama to list models: %s", sanitize_fallback_reason(e))
         return []
 
 async def generate_ollama_response(
@@ -59,5 +61,8 @@ async def generate_ollama_response(
         raise ConnectionError("Model local hiện chưa khả dụng. Hãy mở Ollama rồi thử lại.")
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
-             raise ValueError(f"Model Ollama chưa có. Hãy chạy: ollama pull {model.split(':')[0]}")
+            raise ValueError(
+                f"Model Ollama '{model}' chưa có trong runtime local. "
+                "Hãy provision model theo hướng dẫn cấu hình của dự án rồi thử lại."
+            )
         raise

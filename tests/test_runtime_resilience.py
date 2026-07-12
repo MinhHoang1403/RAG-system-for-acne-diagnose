@@ -5,6 +5,7 @@ import asyncio
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from src.agent.llm import provider as llm_provider
 from src.agent.nodes import cache as cache_node
 from src.api import app as app_module
 from src.resilience.budget import DeadlineBudget
@@ -166,6 +167,45 @@ def test_permanent_and_cancelled_errors_are_not_retryable_or_circuit_opening():
     assert is_retryable_exception(PermanentProviderError("invalid api key")) is False
     assert is_retryable_exception(asyncio.CancelledError()) is False
     assert is_retryable_exception(ProviderUnavailableError("temporary")) is True
+
+
+def test_ollama_model_default_matches_runtime_baseline(monkeypatch):
+    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+
+    provider, model = llm_provider._resolve_model("ollama", None)
+
+    assert provider == "ollama"
+    assert model == "qwen3:8b"
+
+
+@pytest.mark.asyncio
+async def test_provider_fallback_error_message_is_sanitized(monkeypatch):
+    async def fake_list_ollama_models(timeout_seconds=None):
+        return ["qwen3:8b"]
+
+    async def fake_call_provider_resilient(**kwargs):
+        provider = kwargs["provider"]
+        if provider == "gemini":
+            raise RuntimeError("primary failed token=secret-value")
+        raise RuntimeError("fallback failed password=hidden-value")
+
+    monkeypatch.setattr(llm_provider, "list_ollama_models", fake_list_ollama_models)
+    monkeypatch.setattr(llm_provider, "_call_provider_resilient", fake_call_provider_resilient)
+    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+
+    with pytest.raises(Exception) as exc_info:
+        await llm_provider.generate_llm_response(
+            prompt="mụn",
+            provider="gemini",
+            allow_fallback=True,
+            resilience_settings=RuntimeResilienceSettings(llm_max_retries=0),
+        )
+
+    message = str(exc_info.value)
+    assert "secret-value" not in message
+    assert "hidden-value" not in message
+    assert "token=[REDACTED]" in message
+    assert "password=[REDACTED]" in message
 
 
 @pytest.mark.asyncio
