@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from src.agent.answer_formatting import assess_structural_quality, infer_response_profile
 from src.retrieval.contracts import NormalizedQuery, PackedContext, RetrievalTrace
 from src.retrieval.query_normalization import normalize_query
 from src.quality.contracts import (
@@ -59,6 +60,7 @@ def verify_answer_quality(
     _check_retinoid_pregnancy_safety(query_norm, answer_norm, issues, contradictions, safety_warnings)
     _check_isotretinoin_safety(answer_norm, issues, contradictions, safety_warnings)
     _check_acne_type_answer(query_norm, answer_norm, issues, required, detected)
+    _check_structural_presentation(query, answer, issues)
 
     missing = [fact for fact in _dedupe(required) if fact not in _dedupe(detected)]
     for fact in missing:
@@ -348,13 +350,29 @@ def _short_warning(report: AnswerVerificationReport) -> str:
 def _strict_safe_answer(query: str, report: AnswerVerificationReport) -> str:
     facts = report.required_facts[:3] or ["Cần kiểm tra lại thông tin y khoa trước khi trả lời."]
     return (
-        "**Tóm tắt ngắn**\n"
         "Tôi cần hiệu chỉnh câu trả lời vì phát hiện mâu thuẫn y khoa quan trọng.\n\n"
-        "**Thông tin an toàn cần giữ**\n"
+        "## Thông tin an toàn cần giữ\n"
         + "\n".join(f"- {fact}" for fact in facts)
-        + "\n\n**Lưu ý**\n"
-        "Thông tin này chỉ mang tính tham khảo và không thay thế tư vấn của bác sĩ da liễu."
+        + "\n\nThông tin này chỉ mang tính tham khảo và không thay thế tư vấn của bác sĩ da liễu."
     )
+
+
+def _check_structural_presentation(query: str, answer: str, issues: list[AnswerQualityIssue]) -> None:
+    profile = infer_response_profile(query)
+    for issue_data in assess_structural_quality(
+        answer,
+        user_question=query,
+        response_profile=profile,
+    ):
+        severity = issue_data.get("severity", WARNING)
+        issues.append(
+            _issue(
+                str(issue_data.get("code") or "presentation_contract_violation"),
+                ERROR if severity == "error" else WARNING,
+                str(issue_data.get("message") or "Answer violates presentation contract."),
+                evidence=issue_data.get("evidence") if isinstance(issue_data.get("evidence"), dict) else {},
+            )
+        )
 
 
 def _required_fact_is_important(fact: str, intent: str | None) -> bool:

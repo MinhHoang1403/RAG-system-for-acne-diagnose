@@ -146,9 +146,9 @@ async def test_finalize_bp_antibiotic_question_direct_answer_first():
     )
 
     answer = result["final_answer"]
-    assert answer.startswith("**Tóm tắt ngắn**\nKhông, Benzoyl peroxide không phải là kháng sinh.")
-    assert "Benzoyl peroxide không phải là kháng sinh" in answer
-    assert "Không nên tự uống kháng sinh" not in answer.splitlines()[1]
+    assert answer.lower().startswith("không, benzoyl peroxide không phải là kháng sinh.")
+    assert "benzoyl peroxide không phải là kháng sinh" in answer.lower()
+    assert "Không nên tự uống kháng sinh" not in answer.splitlines()[0]
 
 
 @pytest.mark.asyncio
@@ -164,9 +164,9 @@ async def test_finalize_clindamycin_monotherapy_polarity_is_no():
     )
 
     answer = result["final_answer"]
-    assert answer.startswith("**Tóm tắt ngắn**\nKhông. Clindamycin không nên")
+    assert answer.startswith("Không. Clindamycin không nên")
     assert "Có, clindamycin không nên" not in answer
-    assert answer.count("**Khi nào nên gặp bác sĩ**") == 1
+    assert "**Tóm tắt ngắn**" not in answer
 
 
 @pytest.mark.asyncio
@@ -184,12 +184,12 @@ async def test_finalize_adapalene_bp_comparison_covers_both_entities():
     answer = result["final_answer"].lower()
     assert "adapalene" in answer
     assert "benzoyl peroxide" in answer
-    assert "| hoạt chất | vai trò | lưu ý an toàn |" in answer
+    assert "| tiêu chí | adapalene | benzoyl peroxide |" in answer
     assert "retinoid bôi" in answer
     assert "không phải kháng sinh" in answer
     assert "có thể được phối hợp" in answer
     assert "bạc màu" in answer
-    assert answer.count("**khi nào nên gặp bác sĩ**") == 1
+    assert "**khi nào nên gặp bác sĩ**" not in answer
 
 
 @pytest.mark.asyncio
@@ -209,7 +209,8 @@ async def test_finalize_dedupes_duplicate_section_headers():
         }
     )
 
-    assert result["final_answer"].count("**Khi nào nên gặp bác sĩ**") == 1
+    assert result["final_answer"].count("**Khi nào nên gặp bác sĩ**") == 0
+    assert result["final_answer"].count("Nếu mụn đau nhiều.") == 1
 
 
 @pytest.mark.asyncio

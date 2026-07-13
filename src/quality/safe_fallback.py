@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from src.agent.answer_formatting import assess_structural_quality
+
 
 SAFE_FALLBACK_FLOW_VERSION = "safe_fallback_flow_v1"
 
@@ -134,6 +136,21 @@ def decide_retrieval_fallback(state: dict[str, Any]) -> SafeFallbackDecision:
 def decide_generation_fallback(value: Any) -> SafeFallbackDecision:
     if isinstance(value, str):
         if is_usable_text(value):
+            structural_issues = assess_structural_quality(value)
+            blocking_codes = {
+                "incomplete_terminal_sentence",
+                "truncated_generation",
+                "empty_heading",
+                "malformed_sentence_join",
+            }
+            for issue in structural_issues:
+                if issue.get("code") in blocking_codes:
+                    return SafeFallbackDecision(
+                        fallback_applied=True,
+                        fallback_type="invalid_generation",
+                        fallback_reason=f"Structural generation issue: {issue.get('code')}",
+                        fallback_cache_eligible=False,
+                    )
             return SafeFallbackDecision(fallback_applied=False, fallback_type="none", fallback_cache_eligible=True)
         return SafeFallbackDecision(
             fallback_applied=True,

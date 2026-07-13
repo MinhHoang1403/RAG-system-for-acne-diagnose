@@ -106,7 +106,22 @@ async def generate_ollama_response(
             response = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
             response.raise_for_status()
             data = response.json()
-            return data.get("message", {}).get("content", "")
+            done_reason = data.get("done_reason")
+            eval_count = data.get("eval_count")
+            num_predict = payload.get("options", {}).get("num_predict")
+            truncated = str(done_reason or "").lower() in {"length", "num_predict", "context_length"}
+            logger.info(
+                "Ollama generation completed: model=%s done_reason=%s eval_count=%s num_predict=%s truncated=%s",
+                model,
+                done_reason,
+                eval_count,
+                num_predict,
+                truncated,
+            )
+            content = data.get("message", {}).get("content", "")
+            if truncated:
+                return f"{content}\n...[truncated_generation]"
+            return content
     except httpx.ConnectError:
         raise ConnectionError("Model local hiện chưa khả dụng. Hãy mở Ollama rồi thử lại.")
     except httpx.HTTPStatusError as e:
