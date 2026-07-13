@@ -104,6 +104,7 @@ data/embeddings/
 data/cache/
 !data/taxonomy/
 data/taxonomy/*
+!data/taxonomy/drug_aliases.yaml
 !data/taxonomy/drug_taxonomy_v2.yaml
 
 # Keep sample_data structure but ignore large files
