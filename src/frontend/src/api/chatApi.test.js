@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 
-import { parseApiError, sendChatMessage } from './chatApi.js';
+import { fetchModels, parseApiError, sendChatMessage } from './chatApi.js';
 
 function jsonResponse(status, body) {
   return new Response(JSON.stringify(body), {
@@ -69,4 +70,51 @@ test('sendChatMessage sends selected provider and model id', async (t) => {
   assert.equal(capturedBody.llm_provider, 'gemini');
   assert.equal(capturedBody.llm_model, 'gemini-3.5-flash');
   assert.equal(capturedBody.allow_model_fallback, true);
+});
+
+test('fetchModels accepts Gemini 3.1 Flash-Lite catalog entries', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  globalThis.fetch = async () =>
+    jsonResponse(200, {
+      default_provider: 'gemini',
+      default_model: 'gemini-3.5-flash',
+      models: [
+        {
+          provider: 'gemini',
+          model_id: 'gemini-3.5-flash',
+          display_name: 'Gemini 3.5 Flash',
+          available: true,
+          is_default: true,
+        },
+        {
+          provider: 'gemini',
+          model_id: 'gemini-3.1-flash-lite',
+          display_name: 'Gemini 3.1 Flash-Lite',
+          available: true,
+          is_default: false,
+        },
+      ],
+    });
+
+  const catalog = await fetchModels();
+  const flashLite = catalog.models.find((model) => model.model_id === 'gemini-3.1-flash-lite');
+  assert.equal(flashLite.display_name, 'Gemini 3.1 Flash-Lite');
+  assert.equal(flashLite.provider, 'gemini');
+});
+
+test('frontend model selector and badge support Flash-Lite fallback metadata', () => {
+  const selectorSource = fs.readFileSync(new URL('../components/ModelSelector.jsx', import.meta.url), 'utf8');
+  const messageSource = fs.readFileSync(new URL('../components/ChatMessage.jsx', import.meta.url), 'utf8');
+
+  assert.match(selectorSource, /acneAdvisorSelectedModel/);
+  assert.match(selectorSource, /data\.default_provider/);
+  assert.match(selectorSource, /m\.is_default/);
+  assert.match(messageSource, /Gemini 3\.1 Flash-Lite/);
+  assert.match(messageSource, /requested_provider/);
+  assert.match(messageSource, /requested_model/);
+  assert.match(messageSource, /dự phòng từ/);
 });

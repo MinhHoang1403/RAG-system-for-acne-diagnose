@@ -1,0 +1,172 @@
+version: drug_taxonomy_v1
+
+drug_products:
+  differin:
+    canonical_name: Differin
+    aliases:
+      - differin
+    active_ingredients:
+      - adapalene
+    drug_class:
+      - topical_retinoid
+
+  epiduo:
+    canonical_name: Epiduo
+    aliases:
+      - epiduo
+      - epiduo gel
+    active_ingredients:
+      - adapalene
+      - benzoyl_peroxide
+    drug_class:
+      - topical_retinoid
+      - benzoyl_peroxide
+
+  dalacin_t:
+    canonical_name: Dalacin T
+    aliases:
+      - dalacin t
+      - dalacin-t
+      - dalacin
+    active_ingredients:
+      - clindamycin
+    drug_class:
+      - topical_antibiotic
+
+active_ingredients:
+  adapalene:
+    canonical_name: adapalene
+    aliases:
+      - adapalene
+    drug_class:
+      - topical_retinoid
+
+  benzoyl_peroxide:
+    canonical_name: benzoyl_peroxide
+    aliases:
+      - benzoyl peroxide
+      - benzoyl_peroxide
+      - bpo
+      - bp
+    drug_class:
+      - benzoyl_peroxide
+
+  clindamycin:
+    canonical_name: clindamycin
+    aliases:
+      - clindamycin
+      - clindamycin phosphate
+    drug_class:
+      - topical_antibiotic
+
+  tretinoin:
+    canonical_name: tretinoin
+    aliases:
+      - tretinoin
+    drug_class:
+      - topical_retinoid
+
+  isotretinoin:
+    canonical_name: isotretinoin
+    aliases:
+      - isotretinoin
+      - oral isotretinoin
+    drug_class:
+      - oral_retinoid
+
+  doxycycline:
+    canonical_name: doxycycline
+    aliases:
+      - doxycycline
+    drug_class:
+      - oral_antibiotic
+
+  azelaic_acid:
+    canonical_name: azelaic_acid
+    aliases:
+      - azelaic acid
+      - azelaic_acid
+    drug_class:
+      - azelaic_acid
+
+drug_classes:
+  topical_retinoid:
+    canonical_name: topical_retinoid
+    aliases:
+      - topical retinoid
+      - retinoid bôi
+      - retinoid
+
+  oral_retinoid:
+    canonical_name: oral_retinoid
+    aliases:
+      - oral retinoid
+      - retinoid uống
+
+  topical_antibiotic:
+    canonical_name: topical_antibiotic
+    aliases:
+      - topical antibiotic
+      - kháng sinh bôi
+      - kháng sinh bôi tại chỗ
+
+  oral_antibiotic:
+    canonical_name: oral_antibiotic
+    aliases:
+      - oral antibiotic
+      - kháng sinh uống
+      - kháng sinh đường uống
+
+  benzoyl_peroxide:
+    canonical_name: benzoyl_peroxide
+    aliases:
+      - benzoyl peroxide
+      - bpo
+      - bp
+
+conditions:
+  acne_vulgaris:
+    canonical_name: acne_vulgaris
+    aliases:
+      - acne
+      - acne vulgaris
+      - mụn
+      - mụn trứng cá
+      - trứng cá
+
+safety_contexts:
+  pregnancy:
+    canonical_name: pregnancy
+    context_type: pregnancy
+    aliases:
+      - pregnancy
+      - pregnant
+      - thai kỳ
+      - mang thai
+      - có thai
+
+  breastfeeding:
+    canonical_name: breastfeeding
+    context_type: breastfeeding
+    aliases:
+      - breastfeeding
+      - cho con bú
+
+  scarring:
+    canonical_name: scarring
+    context_type: scarring
+    aliases:
+      - sẹo
+      - sẹo mụn
+      - acne scar
+      - scarring
+
+  severe_acne:
+    canonical_name: severe_acne
+    context_type: severe_acne
+    aliases:
+      - mụn nặng
+      - mụn cục
+      - mụn nang
+      - nodular acne
+      - nodulocystic acne

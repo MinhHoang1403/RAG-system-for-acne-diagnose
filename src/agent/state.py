@@ -83,11 +83,14 @@ class ClinicalState(TypedDict):
     llm_provider: str | None
     llm_model: str | None
     allow_model_fallback: bool
+    requested_provider: str | None
+    requested_model: str | None
     actual_provider: str | None
     actual_model: str | None
     llm_fallback_used: bool
     fallback_provider: str | None
     fallback_model: str | None
+    fallback_chain: list[dict[str, Any]] | None
     
     # Cache bypass (for test scripts)
     bypass_cache: bool

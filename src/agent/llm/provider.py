@@ -27,6 +27,7 @@ from src.resilience.retry import RetryPolicy
 logger = logging.getLogger(__name__)
 
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+DEFAULT_GEMINI_FALLBACK_MODELS = ("gemini-3.1-flash-lite",)
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 
 _CIRCUIT_STORE = InMemoryCircuitStateStore()
@@ -63,6 +64,56 @@ def _resolve_model(provider: str, model: Optional[str]) -> tuple[str, str]:
             resolved = f"{resolved}:latest"
         return provider, resolved
     return provider, model or ""
+
+
+def parse_google_fallback_models(
+    value: str | None = None,
+    *,
+    primary_model: str | None = None,
+) -> list[str]:
+    """Parse comma-separated Gemini fallback models while preserving order."""
+
+    raw = os.getenv("GOOGLE_FALLBACK_MODELS") if value is None else value
+    if raw is None:
+        candidates = list(DEFAULT_GEMINI_FALLBACK_MODELS)
+    else:
+        candidates = [item.strip() for item in raw.split(",")]
+
+    primary = (primary_model or os.getenv("GOOGLE_MODEL", DEFAULT_GEMINI_MODEL)).strip()
+    if primary == "gemini-1.5-flash":
+        primary = DEFAULT_GEMINI_MODEL
+
+    seen: set[str] = set()
+    parsed: list[str] = []
+    for candidate in candidates:
+        if not candidate or candidate == primary or candidate in seen:
+            continue
+        seen.add(candidate)
+        parsed.append(candidate)
+    return parsed
+
+
+def _provider_model_key(provider: str, model: str) -> str:
+    return f"{provider}:{model}"
+
+
+def _fallback_reason_from_error(exc: BaseException) -> str:
+    error_code = getattr(exc, "error_code", "")
+    cause = getattr(exc, "__cause__", None)
+    text = f"{exc} {cause or ''}".lower()
+    if "resource_exhausted" in text or "quota" in text:
+        return "quota_exhausted"
+    if "429" in text or "rate limit" in text or "rate_limited" in text:
+        return "rate_limited"
+    if error_code == "provider_timeout" or "timed out" in text or "timeout" in text:
+        return "provider_timeout"
+    if error_code == "circuit_open":
+        return "circuit_open"
+    if error_code == "retry_exhausted":
+        return "retry_exhausted"
+    if error_code == "provider_unavailable" or "503" in text or "unavailable" in text:
+        return "provider_unavailable"
+    return error_code or "provider_unavailable"
 
 
 def _safe_error_text(exc: BaseException) -> str:
@@ -172,7 +223,7 @@ async def _call_provider_resilient(
         )
 
     return await call_provider_with_resilience(
-        provider_name=provider,
+        provider_name=_provider_model_key(provider, model),
         operation=operation,
         budget=budget,
         timeout_seconds=timeout_seconds,
@@ -207,14 +258,27 @@ async def generate_llm_response(
     settings = resilience_settings or runtime_resilience_settings_from_env()
     budget = budget or DeadlineBudget.from_timeout(settings.agent_total_timeout_seconds)
     provider, model = _resolve_model(provider or "gemini", model)
+    requested_provider = provider
+    requested_model = model
     
     result = {
         "text": "",
         "provider": provider,
         "model": model,
+        "requested_provider": requested_provider,
+        "requested_model": requested_model,
         "fallback_used": False,
         "fallback_provider": None,
         "fallback_model": None,
+        "fallback_reason": None,
+        "fallback_chain": [
+            {
+                "provider": provider,
+                "model": model,
+                "role": "primary",
+                "status": "pending",
+            }
+        ],
         "error": None,
         "resilience": None,
     }
@@ -233,6 +297,7 @@ async def generate_llm_response(
         )
         result["text"] = text
         result["resilience"] = resilience_meta
+        result["fallback_chain"][0]["status"] = "success"
         return result
             
     except asyncio.CancelledError:
@@ -268,92 +333,105 @@ async def generate_llm_response(
 
         primary_error = e
 
-    try:
-        logger.info("Attempting fallback...")
-        
-        if provider == "gemini":
-            # Fallback to Ollama
-            available_models = await list_ollama_models(timeout_seconds=min(5.0, budget.remaining_seconds()))
-            fallback_model = None
-            configured_model = os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
-            configured_model = (
-                configured_model
-                if ":" in configured_model
-                else f"{configured_model}:latest"
+    result["fallback_chain"][0]["status"] = "failed"
+    result["fallback_chain"][0]["reason"] = _fallback_reason_from_error(primary_error)
+
+    fallback_targets: list[tuple[str, str]] = []
+    if allow_fallback and provider == "gemini":
+        fallback_targets.extend(
+            ("gemini", fallback_model)
+            for fallback_model in parse_google_fallback_models(primary_model=model)
+        )
+        available_models = await list_ollama_models(timeout_seconds=min(5.0, budget.remaining_seconds()))
+        configured_model = os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+        configured_model = configured_model if ":" in configured_model else f"{configured_model}:latest"
+        if configured_model in available_models:
+            fallback_targets.append(("ollama", configured_model))
+        elif DEFAULT_OLLAMA_MODEL in available_models:
+            fallback_targets.append(("ollama", DEFAULT_OLLAMA_MODEL))
+        elif "qwen3:latest" in available_models:
+            fallback_targets.append(("ollama", "qwen3:latest"))
+        elif "qwen2.5:latest" in available_models:
+            fallback_targets.append(("ollama", "qwen2.5:latest"))
+    elif allow_fallback and provider == "ollama":
+        fallback_targets = []
+
+    last_error: BaseException = primary_error
+    for fallback_provider, fallback_model in fallback_targets:
+        chain_entry = {
+            "provider": fallback_provider,
+            "model": fallback_model,
+            "role": "fallback",
+            "status": "pending",
+        }
+        result["fallback_chain"].append(chain_entry)
+        try:
+            logger.info("Fallback to %s (%s)...", fallback_provider, fallback_model)
+            text, resilience_meta = await _call_provider_resilient(
+                provider=fallback_provider,
+                model=fallback_model,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                use_sync=use_sync,
+                budget=budget,
+                settings=settings,
             )
-            if configured_model in available_models:
-                fallback_model = configured_model
-            elif DEFAULT_OLLAMA_MODEL in available_models:
-                fallback_model = DEFAULT_OLLAMA_MODEL
-            elif "qwen3:latest" in available_models:
-                fallback_model = "qwen3:latest"
-            elif "qwen2.5:latest" in available_models:
-                fallback_model = "qwen2.5:latest"
-                
-            if fallback_model:
-                try:
-                    logger.info("Fallback to Ollama (%s)...", fallback_model)
-                    text, resilience_meta = await _call_provider_resilient(
-                        provider="ollama",
-                        model=fallback_model,
-                        prompt=prompt,
-                        system_prompt=system_prompt,
-                        temperature=temperature,
-                        use_sync=use_sync,
-                        budget=budget,
-                        settings=settings,
-                    )
-                    result["text"] = text
-                    result["resilience"] = resilience_meta
-                    result["fallback_used"] = True
-                    result["fallback_provider"] = "ollama"
-                    result["fallback_model"] = fallback_model
-                    return result
-                except Exception as fb_err:
-                    primary_text = _safe_error_text(primary_error)
-                    fallback_text = _safe_error_text(fb_err)
-                    logger.error("Fallback Ollama also failed: %s", fallback_text)
-                    if isinstance(fb_err, RuntimeResilienceError):
-                        raise fb_err
-                    result["error"] = f"Primary ({primary_text}) and Fallback ({fallback_text}) both failed."
-                    raise Exception(result["error"])
-            else:
-                logger.error("No suitable Ollama models available for fallback.")
-                result["error"] = _safe_error_text(primary_error)
-                raise primary_error
-                
-        elif provider == "ollama":
-            # Fallback to Gemini
-            fallback_model = os.getenv("GOOGLE_MODEL", DEFAULT_GEMINI_MODEL)
-            if fallback_model == "gemini-1.5-flash":
-                fallback_model = DEFAULT_GEMINI_MODEL
-                
-            try:
-                logger.info("Fallback to Gemini (%s)...", fallback_model)
-                text, resilience_meta = await _call_provider_resilient(
-                    provider="gemini",
-                    model=fallback_model,
-                    prompt=prompt,
-                    system_prompt=system_prompt,
-                    temperature=temperature,
-                    use_sync=use_sync,
-                    budget=budget,
-                    settings=settings,
-                )
-                result["text"] = text
-                result["resilience"] = resilience_meta
-                result["fallback_used"] = True
-                result["fallback_provider"] = "gemini"
-                result["fallback_model"] = fallback_model
-                return result
-            except Exception as fb_err:
-                primary_text = _safe_error_text(primary_error)
-                fallback_text = _safe_error_text(fb_err)
-                logger.error("Fallback Gemini also failed: %s", fallback_text)
-                if isinstance(fb_err, RuntimeResilienceError):
-                    raise fb_err
-                result["error"] = f"Primary ({primary_text}) and Fallback ({fallback_text}) both failed."
-                raise Exception(result["error"])
-    except asyncio.CancelledError:
-        raise
+            chain_entry["status"] = "success"
+            result["text"] = text
+            result["provider"] = fallback_provider
+            result["model"] = fallback_model
+            result["resilience"] = resilience_meta
+            result["fallback_used"] = True
+            result["fallback_provider"] = fallback_provider
+            result["fallback_model"] = fallback_model
+            result["fallback_reason"] = result["fallback_chain"][0].get("reason")
+            return result
+        except asyncio.CancelledError:
+            raise
+        except PermanentProviderError:
+            chain_entry["status"] = "failed"
+            chain_entry["reason"] = "permanent_provider_error"
+            raise
+        except RuntimeResilienceError as fb_err:
+            chain_entry["status"] = "failed"
+            chain_entry["reason"] = _fallback_reason_from_error(fb_err)
+            last_error = fb_err
+            logger.warning(
+                "Fallback %s/%s failed: %s",
+                fallback_provider,
+                fallback_model,
+                _safe_error_text(fb_err),
+            )
+            continue
+        except Exception as fb_err:
+            chain_entry["status"] = "failed"
+            chain_entry["reason"] = _fallback_reason_from_error(fb_err)
+            last_error = fb_err
+            logger.warning(
+                "Fallback %s/%s failed: %s",
+                fallback_provider,
+                fallback_model,
+                _safe_error_text(fb_err),
+            )
+            continue
+
+    if fallback_targets:
+        logger.error("All LLM fallback targets failed.")
+        if isinstance(last_error, RuntimeResilienceError):
+            raise last_error
+        result["error"] = (
+            f"Primary ({_safe_error_text(primary_error)}) and "
+            f"Fallback ({_safe_error_text(last_error)}) both failed."
+        )
+        raise Exception(result["error"])
     raise primary_error
+
+
+__all__ = [
+    "DEFAULT_GEMINI_FALLBACK_MODELS",
+    "DEFAULT_GEMINI_MODEL",
+    "DEFAULT_OLLAMA_MODEL",
+    "generate_llm_response",
+    "parse_google_fallback_models",
+]

@@ -13,6 +13,8 @@ env:
   LLAMA_CLOUD_API_KEY: ""
   HF_HUB_OFFLINE: "1"
   TRANSFORMERS_OFFLINE: "1"
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
   OBSERVABILITY_ENABLED: "false"
   PHASE2_DEBUG_METADATA: "false"
   CACHE_ANSWER_VERSION: v5
@@ -94,7 +96,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
-          node-version: "26.2.0"
+          node-version: "24.x"
           cache: npm
           cache-dependency-path: src/frontend/package-lock.json
 

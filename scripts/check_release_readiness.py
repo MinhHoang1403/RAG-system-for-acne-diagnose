@@ -40,6 +40,19 @@ EXPECTED_COUNTS = {
 SECRET_PATTERNS = ("AI" + "za",)
 
 
+def _configure_utf8_stdio() -> None:
+    """Best-effort UTF-8 output for Windows consoles and CI runners."""
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (OSError, ValueError):
+            continue
+
+
 def check(name: str, passed: bool, details: dict[str, Any] | None = None, severity: str = "error") -> dict[str, Any]:
     return {
         "name": name,
@@ -595,4 +608,5 @@ async def main_async() -> int:
 
 
 if __name__ == "__main__":
+    _configure_utf8_stdio()
     raise SystemExit(asyncio.run(main_async()))

@@ -13,6 +13,8 @@ DEFAULT_RERANKER_VERSION = "reranker_pipeline_v2"
 DEFAULT_GOOGLE_GENAI_SDK_VERSION = "google_genai_sdk_v1"
 DEFAULT_REPRODUCIBLE_ENVIRONMENT_VERSION = "reproducible_environment_v1"
 DEFAULT_END_TO_END_RELEASE_READINESS_VERSION = "end_to_end_release_readiness_v1"
+DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v1"
+DEFAULT_LLM_FALLBACK_POLICY_VERSION = "llm_fallback_policy_v2"
 LEGACY_ANSWER_CACHE_VERSIONS = {"v1", "v2", "v3", "v4"}
 
 _SECRET_KEY_MARKERS = (
@@ -44,6 +46,10 @@ def build_pipeline_version_manifest(settings: Mapping[str, Any] | None = None) -
         "context_packer_version": value("CONTEXT_PACKER_VERSION", "context_packer_v3"),
         "reranker_version": value("RERANKER_VERSION", DEFAULT_RERANKER_VERSION),
         "answer_verifier_version": value("ANSWER_VERIFIER_VERSION", "answer_verifier_v2"),
+        "answer_formatting_contract_version": value(
+            "ANSWER_FORMATTING_CONTRACT_VERSION",
+            DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION,
+        ),
         "severity_guard_version": value("SEVERITY_GUARD_VERSION", "severity_aware_answer_guard_v1"),
         "safe_fallback_flow_version": value("SAFE_FALLBACK_FLOW_VERSION", "safe_fallback_flow_v1"),
         "google_genai_sdk_version": value("GOOGLE_GENAI_SDK_VERSION", DEFAULT_GOOGLE_GENAI_SDK_VERSION),
@@ -56,6 +62,15 @@ def build_pipeline_version_manifest(settings: Mapping[str, Any] | None = None) -
             DEFAULT_END_TO_END_RELEASE_READINESS_VERSION,
         ),
         "runtime_resilience_version": value("RUNTIME_RESILIENCE_VERSION", "runtime_resilience_v1"),
+        "llm_fallback_policy_version": value(
+            "LLM_FALLBACK_POLICY_VERSION",
+            DEFAULT_LLM_FALLBACK_POLICY_VERSION,
+        ),
+        "google_model": value("GOOGLE_MODEL", "gemini-3.5-flash") or "gemini-3.5-flash",
+        "google_fallback_models": _csv_list(
+            value("GOOGLE_FALLBACK_MODELS", "gemini-3.1-flash-lite")
+        ),
+        "ollama_model": value("OLLAMA_MODEL", "qwen3:8b") or "qwen3:8b",
         "neo4j_schema_version": value("NEO4J_SCHEMA_VERSION", "neo4j_schema_v1"),
         "taxonomy_version": value("TAXONOMY_VERSION", "drug_taxonomy_v1"),
         "cache_schema_version": value("CACHE_SCHEMA_VERSION", "v3"),
@@ -137,9 +152,14 @@ def pipeline_manifest_summary(manifest: dict[str, Any] | None = None) -> dict[st
         "context_packer_version",
         "reranker_version",
         "answer_verifier_version",
+        "answer_formatting_contract_version",
         "severity_guard_version",
         "safe_fallback_flow_version",
         "google_genai_sdk_version",
+        "llm_fallback_policy_version",
+        "google_model",
+        "google_fallback_models",
+        "ollama_model",
         "reproducible_environment_version",
         "end_to_end_release_readiness_version",
         "runtime_resilience_version",
@@ -199,6 +219,18 @@ def _env_float(value: Any, *, default: float) -> float:
         return default
 
 
+def _csv_list(value: Any) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for item in str(value or "").split(","):
+        normalized = item.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        output.append(normalized)
+    return output
+
+
 def _semantic_model_identifier(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -247,8 +279,10 @@ def _runtime_entity_collection_name(settings: Mapping[str, Any]) -> str:
 
 __all__ = [
     "DEFAULT_ANSWER_CACHE_VERSION",
+    "DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION",
     "DEFAULT_END_TO_END_RELEASE_READINESS_VERSION",
     "DEFAULT_GOOGLE_GENAI_SDK_VERSION",
+    "DEFAULT_LLM_FALLBACK_POLICY_VERSION",
     "DEFAULT_REPRODUCIBLE_ENVIRONMENT_VERSION",
     "DEFAULT_RERANKER_VERSION",
     "build_pipeline_version_manifest",

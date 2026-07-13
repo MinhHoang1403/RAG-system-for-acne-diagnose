@@ -1,0 +1,215 @@
+from __future__ import annotations
+
+import pytest
+
+from src.agent.llm import provider as llm_provider
+from src.resilience.circuit_breaker import CircuitBreaker, InMemoryCircuitStateStore
+from src.resilience.contracts import RuntimeResilienceSettings
+from src.resilience.exceptions import CircuitOpenError, PermanentProviderError, ProviderUnavailableError
+
+
+def _settings() -> RuntimeResilienceSettings:
+    return RuntimeResilienceSettings(
+        agent_total_timeout_seconds=10,
+        gemini_timeout_seconds=2,
+        ollama_timeout_seconds=2,
+        llm_max_retries=0,
+        circuit_breaker_failure_threshold=1,
+        circuit_breaker_recovery_seconds=60,
+    )
+
+
+async def _no_ollama_models(**_: object) -> list[str]:
+    return []
+
+
+async def _qwen3_ollama_model(**_: object) -> list[str]:
+    return ["qwen3:8b"]
+
+
+def test_parse_google_fallback_models_default_and_cleanup(monkeypatch):
+    monkeypatch.delenv("GOOGLE_FALLBACK_MODELS", raising=False)
+    assert llm_provider.parse_google_fallback_models(primary_model="gemini-3.5-flash") == [
+        "gemini-3.1-flash-lite"
+    ]
+
+    parsed = llm_provider.parse_google_fallback_models(
+        " gemini-3.1-flash-lite, gemini-3.5-flash, , another-model, gemini-3.1-flash-lite ",
+        primary_model="gemini-3.5-flash",
+    )
+    assert parsed == ["gemini-3.1-flash-lite", "another-model"]
+
+    assert llm_provider.parse_google_fallback_models("", primary_model="gemini-3.5-flash") == []
+
+
+@pytest.mark.asyncio
+async def test_primary_gemini_success_does_not_call_fallback(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    async def fake_call(**kwargs):
+        calls.append((kwargs["provider"], kwargs["model"]))
+        return "primary ok", {"provider_name": f'{kwargs["provider"]}:{kwargs["model"]}'}
+
+    monkeypatch.setattr(llm_provider, "_call_provider_resilient", fake_call)
+
+    result = await llm_provider.generate_llm_response(
+        prompt="x",
+        provider="gemini",
+        model="gemini-3.5-flash",
+        allow_fallback=True,
+        resilience_settings=_settings(),
+    )
+
+    assert calls == [("gemini", "gemini-3.5-flash")]
+    assert result["provider"] == "gemini"
+    assert result["model"] == "gemini-3.5-flash"
+    assert result["fallback_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_gemini_429_falls_back_to_flash_lite(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    async def fake_call(**kwargs):
+        calls.append((kwargs["provider"], kwargs["model"]))
+        if kwargs["model"] == "gemini-3.5-flash":
+            raise ProviderUnavailableError("gemini returned retryable HTTP 429 RESOURCE_EXHAUSTED")
+        return "flash-lite ok", {"provider_name": f'{kwargs["provider"]}:{kwargs["model"]}'}
+
+    monkeypatch.setenv("GOOGLE_FALLBACK_MODELS", "gemini-3.1-flash-lite")
+    monkeypatch.setattr(llm_provider, "_call_provider_resilient", fake_call)
+    monkeypatch.setattr(llm_provider, "list_ollama_models", _no_ollama_models)
+
+    result = await llm_provider.generate_llm_response(
+        prompt="x",
+        provider="gemini",
+        model="gemini-3.5-flash",
+        allow_fallback=True,
+        resilience_settings=_settings(),
+    )
+
+    assert calls == [("gemini", "gemini-3.5-flash"), ("gemini", "gemini-3.1-flash-lite")]
+    assert result["requested_model"] == "gemini-3.5-flash"
+    assert result["model"] == "gemini-3.1-flash-lite"
+    assert result["fallback_used"] is True
+    assert result["fallback_reason"] == "quota_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_gemini_circuit_open_does_not_block_flash_lite(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    async def fake_call(**kwargs):
+        calls.append((kwargs["provider"], kwargs["model"]))
+        if kwargs["model"] == "gemini-3.5-flash":
+            raise CircuitOpenError("Circuit is open for provider gemini:gemini-3.5-flash.")
+        return "flash-lite ok", {"provider_name": f'{kwargs["provider"]}:{kwargs["model"]}'}
+
+    monkeypatch.setenv("GOOGLE_FALLBACK_MODELS", "gemini-3.1-flash-lite")
+    monkeypatch.setattr(llm_provider, "_call_provider_resilient", fake_call)
+    monkeypatch.setattr(llm_provider, "list_ollama_models", _no_ollama_models)
+
+    result = await llm_provider.generate_llm_response(
+        prompt="x",
+        provider="gemini",
+        model="gemini-3.5-flash",
+        allow_fallback=True,
+        resilience_settings=_settings(),
+    )
+
+    assert calls == [("gemini", "gemini-3.5-flash"), ("gemini", "gemini-3.1-flash-lite")]
+    assert result["model"] == "gemini-3.1-flash-lite"
+    assert result["fallback_reason"] == "circuit_open"
+
+
+@pytest.mark.asyncio
+async def test_both_gemini_models_fail_then_ollama_success(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    async def fake_call(**kwargs):
+        calls.append((kwargs["provider"], kwargs["model"]))
+        if kwargs["provider"] == "gemini":
+            raise ProviderUnavailableError("provider returned retryable HTTP 503")
+        return "ollama ok", {"provider_name": f'{kwargs["provider"]}:{kwargs["model"]}'}
+
+    monkeypatch.setenv("GOOGLE_FALLBACK_MODELS", "gemini-3.1-flash-lite")
+    monkeypatch.setattr(llm_provider, "_call_provider_resilient", fake_call)
+    monkeypatch.setattr(llm_provider, "list_ollama_models", _qwen3_ollama_model)
+
+    result = await llm_provider.generate_llm_response(
+        prompt="x",
+        provider="gemini",
+        model="gemini-3.5-flash",
+        allow_fallback=True,
+        resilience_settings=_settings(),
+    )
+
+    assert calls == [
+        ("gemini", "gemini-3.5-flash"),
+        ("gemini", "gemini-3.1-flash-lite"),
+        ("ollama", "qwen3:8b"),
+    ]
+    assert result["provider"] == "ollama"
+    assert result["model"] == "qwen3:8b"
+    assert result["fallback_used"] is True
+
+
+@pytest.mark.asyncio
+async def test_auto_fallback_disabled_does_not_call_secondary(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    async def fake_call(**kwargs):
+        calls.append((kwargs["provider"], kwargs["model"]))
+        raise ProviderUnavailableError("provider returned retryable HTTP 503")
+
+    monkeypatch.setattr(llm_provider, "_call_provider_resilient", fake_call)
+
+    with pytest.raises(ProviderUnavailableError):
+        await llm_provider.generate_llm_response(
+            prompt="x",
+            provider="gemini",
+            model="gemini-3.5-flash",
+            allow_fallback=False,
+            resilience_settings=_settings(),
+        )
+
+    assert calls == [("gemini", "gemini-3.5-flash")]
+
+
+@pytest.mark.asyncio
+async def test_permanent_provider_error_does_not_fallback(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    async def fake_call(**kwargs):
+        calls.append((kwargs["provider"], kwargs["model"]))
+        raise PermanentProviderError("gemini returned non-retryable HTTP 401")
+
+    monkeypatch.setattr(llm_provider, "_call_provider_resilient", fake_call)
+
+    with pytest.raises(PermanentProviderError):
+        await llm_provider.generate_llm_response(
+            prompt="x",
+            provider="gemini",
+            model="gemini-3.5-flash",
+            allow_fallback=True,
+            resilience_settings=_settings(),
+        )
+
+    assert calls == [("gemini", "gemini-3.5-flash")]
+
+
+def test_circuit_breaker_is_model_scoped():
+    settings = RuntimeResilienceSettings(
+        circuit_breaker_failure_threshold=1,
+        circuit_breaker_recovery_seconds=60,
+    )
+    breaker = CircuitBreaker(settings, store=InMemoryCircuitStateStore())
+
+    breaker.record_failure("gemini:gemini-3.5-flash", transient=True)
+    with pytest.raises(CircuitOpenError):
+        breaker.before_call("gemini:gemini-3.5-flash")
+
+    assert breaker.before_call("gemini:gemini-3.1-flash-lite").provider_name == (
+        "gemini:gemini-3.1-flash-lite"
+    )
+    assert breaker.before_call("ollama:qwen3:8b").provider_name == "ollama:qwen3:8b"

@@ -4,6 +4,11 @@ src/agent/prompts/medical_answer.py
 Prompt templates for generating medical RAG answers.
 """
 
+from src.agent.answer_formatting import (
+    ANSWER_FORMATTING_CONTRACT,
+    answer_format_instruction_for_question,
+)
+
 MEDICAL_RAG_SYSTEM_PROMPT = """\
 Bạn là trợ lý AI chuyên về mụn trứng cá và chăm sóc da mụn. Nhiệm vụ của bạn là trả lời bằng tiếng Việt tự nhiên, dễ hiểu cho người dùng phổ thông, dựa trên các đoạn tài liệu đã truy hồi từ NICE NG198, AAD 2024 và tài liệu tiếng Việt "TRỨNG CÁ (Acnes)".
 
@@ -42,12 +47,12 @@ PRIMARY ENTITY PRESERVATION:
 - Với câu hỏi so sánh như "A và B khác nhau thế nào", "A khác B thế nào", "so sánh A với B", câu trả lời phải cover đầy đủ cả A và B. Primary entities trong câu hỏi phải xuất hiện trong answer; ưu tiên bảng hoặc bullet đối chiếu. Nếu context chỉ đủ cho một bên, vẫn nhắc bên còn lại và nói "Tài liệu hiện có chưa đủ thông tin về ...".
 
 CẤU TRÚC TRẢ LỜI LINH HOẠT:
-- Với câu hỏi đơn giản: 3-5 đoạn ngắn gồm tóm tắt, giải thích, lưu ý an toàn, khi nào nên gặp bác sĩ, lưu ý y khoa.
-- Với câu hỏi điều trị: dùng các mục **Tóm tắt ngắn**, **Điều trị thường gặp theo tài liệu**, **Lưu ý theo mức độ mụn**, **Tác dụng phụ/cảnh báo**, **Khi nào nên gặp bác sĩ**, **Lưu ý**.
-- Với câu hỏi so sánh: có thể dùng bảng gồm Hoạt chất/thuốc, Vai trò, Ưu điểm, Lưu ý an toàn, Khi nào cần bác sĩ.
+- Chọn cấu trúc theo intent thật của câu hỏi, không dùng một template dài cho mọi trường hợp.
+- Với câu hỏi đơn giản hoặc định danh thuốc: trả lời trực tiếp rồi giải thích ngắn trong 1-3 đoạn.
+- Với câu hỏi so sánh: có thể dùng bảng gồm Hoạt chất/thuốc, Vai trò, Điểm khác biệt, Lưu ý an toàn.
 - Với routine chăm sóc da: chỉ đưa routine nếu context đủ; ưu tiên rửa mặt dịu nhẹ/syndet pH trung tính hoặc hơi acid, tránh oil-based/comedogenic, tẩy trang cuối ngày nếu trang điểm, không cạy/nặn/cào gãi.
 - Với thuốc kê đơn: không kê đơn trực tiếp; nói thuốc dùng trong bối cảnh nào, vì sao cần bác sĩ, cần theo dõi gì nếu tài liệu có, dấu hiệu cần đi khám.
-- Mục **Lưu ý** phải có câu: "Thông tin này chỉ mang tính tham khảo và không thay thế tư vấn y khoa chuyên nghiệp."
+- Chỉ thêm disclaimer một lần ở cuối nếu cần. Không lặp "Khi nào nên gặp bác sĩ" hoặc các heading khác.
 
 RULE Y KHOA BẮT BUỘC:
 1. Acne cơ bản: mụn trứng cá là bệnh viêm mạn tính của đơn vị nang lông - tuyến bã; tổn thương gồm mụn đầu trắng, đầu đen, sẩn viêm, mụn mủ, cục, nang; vị trí thường gặp gồm mặt, cổ, ngực, lưng trên, cánh tay trên; cơ chế gồm tăng tiết bã, dày sừng cổ nang lông, C. acnes và trung gian viêm; mụn có thể ảnh hưởng thẩm mỹ, tâm lý và sự tự tin.
@@ -80,7 +85,8 @@ def build_medical_prompt(
 ) -> str:
     """Builds the complete prompt string to send to the LLM."""
     
-    prompt = f"{MEDICAL_RAG_SYSTEM_PROMPT}\n\n"
+    prompt = f"{MEDICAL_RAG_SYSTEM_PROMPT}\n\n{ANSWER_FORMATTING_CONTRACT}\n\n"
+    prompt += answer_format_instruction_for_question(question) + "\n\n"
     
     if ignored_out_of_domain_part:
         prompt += "CHỈ ĐẠO BỔ SUNG: Người dùng đã hỏi một câu có chứa cả phần ngoài lề và phần liên quan đến mụn/da liễu. Bạn hãy bắt đầu câu trả lời bằng việc Lịch sự từ chối trả lời phần ngoài lề (ví dụ: 'Tôi không hỗ trợ phần ngoài phạm vi, nhưng đối với tình trạng mụn...'), sau đó tiếp tục tư vấn phần da liễu.\n\n"
