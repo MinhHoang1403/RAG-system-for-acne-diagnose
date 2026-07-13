@@ -1,10 +1,11 @@
-import { formatText } from '../utils/markdown.jsx';
+import { formatText } from '../utils/markdown.js';
 import DebugPanel from './DebugPanel.jsx';
 
 function modelDisplayName(provider, model) {
   const modelId = model || '';
   if (provider === 'gemini' || modelId.includes('gemini')) {
     if (modelId.includes('3.5')) return 'Gemini 3.5 Flash';
+    if (modelId.includes('3.1-flash-lite')) return 'Gemini 3.1 Flash-Lite';
     if (modelId.includes('2.5')) return 'Gemini 2.5 Flash';
     return modelId || 'Gemini';
   }
@@ -104,9 +105,12 @@ export default function ChatMessage({ msg }) {
                               return `♻️ Cached · originally answered by ${fbName}`;
                             }
                             if (meta.fallback_used && meta.fallback_provider) {
-                              const origName = modelDisplayName(meta.provider, meta.model);
-                              const fbName = modelDisplayName(meta.fallback_provider, meta.fallback_model);
-                              return `⚠️ Fallback: ${origName} → ${fbName}`;
+                              const actualName = modelDisplayName(meta.provider, meta.model);
+                              const requestedName = modelDisplayName(
+                                meta.requested_provider,
+                                meta.requested_model,
+                              );
+                              return `⚠️ ${actualName} · dự phòng từ ${requestedName}`;
                             }
                             if (meta.provider === 'gemini') return `⚡ ${modelDisplayName(meta.provider, meta.model)}`;
                             if (meta.provider === 'ollama') {

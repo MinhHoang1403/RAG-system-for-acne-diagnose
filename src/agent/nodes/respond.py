@@ -6,6 +6,7 @@ LangGraph nodes for finalizing the response.
 
 import logging
 
+from src.agent.answer_formatting import normalize_answer_markdown
 from src.agent.state import ClinicalState
 from src.agent.text_encoding import repair_mojibake
 
@@ -31,21 +32,14 @@ def _dedupe_section_headings(text: str) -> str:
     lines = text.splitlines()
     seen: set[str] = set()
     output: list[str] = []
-    skip_until_next_heading = False
 
     for line in lines:
         stripped = line.strip()
         if stripped in _SECTION_HEADINGS:
             if stripped in seen:
-                skip_until_next_heading = True
                 continue
             seen.add(stripped)
-            skip_until_next_heading = False
             output.append(line)
-            continue
-        if skip_until_next_heading and stripped in _SECTION_HEADINGS:
-            skip_until_next_heading = False
-        if skip_until_next_heading:
             continue
         output.append(line)
 
@@ -81,7 +75,7 @@ async def finalize_response_node(state: ClinicalState) -> dict:
     
     if state.get("is_in_domain") is False:
         logger.info("Finalizing out-of-domain response.")
-        disclaimer = "Thông tin này chỉ mang tính tham khảo và không thay thế tư vấn y khoa chuyên nghiệp."
+        disclaimer = "Thông tin mang tính tham khảo và không thay thế chẩn đoán của bác sĩ."
         refusal = state.get("refusal_message", "Xin lỗi, tôi không thể trả lời câu hỏi này.")
         refusal = refusal.replace(disclaimer, "").strip()
         guardrail = state.get("guardrail")
@@ -307,10 +301,23 @@ async def finalize_response_node(state: ClinicalState) -> dict:
         ]
     )
     adapalene_question = "adapalene" in combined_question_context or "adapalen" in combined_question_context
+    differin_class_question = (
+        "differin" in combined_question_context
+        and any(marker in combined_question_context for marker in ["thuộc nhóm", "nhóm thuốc", "nhóm gì", "là gì"])
+    )
+    epiduo_composition_question = (
+        "epiduo" in combined_question_context
+        and any(marker in combined_question_context for marker in ["bpo", "benzoyl", "thành phần", "chứa", "có"])
+    )
     clindamycin_monotherapy_question = (
         "clindamycin" in combined_question_context
         and any(marker in combined_question_context for marker in ["đơn độc", "đơn trị liệu", "monotherapy"])
         and any(marker in combined_question_context for marker in ["có nên", "nên dùng", "dùng được không"])
+    )
+    blackhead_whitehead_comparison_question = (
+        any(marker in combined_question_context for marker in ["mụn đầu đen", "blackhead"])
+        and any(marker in combined_question_context for marker in ["mụn đầu trắng", "whitehead"])
+        and any(marker in combined_question_context for marker in ["khác nhau", "khác gì", "so sánh"])
     )
     adapalene_bp_comparison_question = (
         adapalene_question
@@ -343,6 +350,27 @@ async def finalize_response_node(state: ClinicalState) -> dict:
             "**Khi nào nên gặp bác sĩ**\n"
             "Nên khám da liễu nếu mụn viêm tăng, đau, để lại sẹo/thâm nhiều hoặc không cải thiện sau chăm sóc cơ bản.\n\n"
             "**Lưu ý**\n"
+        )
+    elif blackhead_whitehead_comparison_question:
+        draft = (
+            "Mụn đầu đen và mụn đầu trắng đều là mụn nhân do bít tắc nang lông, nhưng khác nhau ở việc nhân mụn mở hay đóng trên bề mặt da.\n\n"
+            "| Loại mụn | Khác biệt chính | Ý nghĩa chăm sóc |\n"
+            "|---|---|---|\n"
+            "| Mụn đầu đen | Nhân mụn mở; chất bã và tế bào sừng tiếp xúc với không khí nên bề mặt sẫm màu. | Không phải do bẩn. Tránh nặn mạnh vì dễ kích ứng và tăng nguy cơ thâm/sẹo. |\n"
+            "| Mụn đầu trắng | Nhân mụn đóng; lỗ nang lông bị che phủ nên nhìn như nốt trắng/da gồ nhỏ. | Cũng liên quan bít tắc; chăm sóc nền dịu nhẹ và tránh sản phẩm dễ gây bít tắc. |\n\n"
+            "Cả hai có thể cùng xuất hiện trong mụn trứng cá. Nên gặp bác sĩ da liễu nếu mụn viêm nhiều, đau, để lại sẹo hoặc không cải thiện sau chăm sóc phù hợp."
+        )
+    elif differin_class_question:
+        draft = (
+            "Differin thuộc nhóm retinoid bôi ngoài da (topical retinoid). Hoạt chất chính của Differin là adapalene.\n\n"
+            "Adapalene giúp điều hòa sừng hóa nang lông, giảm bít tắc/nhân mụn và có tác dụng chống viêm. Hoạt chất này không phải là kháng sinh.\n\n"
+            "Nếu đang mang thai, chuẩn bị mang thai hoặc da kích ứng mạnh, nên hỏi bác sĩ da liễu trước khi dùng retinoid."
+        )
+    elif epiduo_composition_question:
+        draft = (
+            "Có. Epiduo chứa hai hoạt chất chính là adapalene và benzoyl peroxide (BPO).\n\n"
+            "Adapalene là retinoid bôi, giúp giảm bít tắc nang lông và hỗ trợ chống viêm. Benzoyl peroxide không phải kháng sinh; đây là hoạt chất bôi có tác dụng kháng khuẩn/antimicrobial với C. acnes và tiêu sừng nhẹ.\n\n"
+            "Hai hoạt chất này có thể gây khô, đỏ, rát hoặc bong tróc; benzoyl peroxide còn có thể làm bạc màu vải/tóc. Nếu đang mang thai hoặc da kích ứng mạnh, nên hỏi bác sĩ trước khi dùng."
         )
     elif bp_antibiotic_identity_question:
         draft = (
@@ -637,7 +665,7 @@ async def finalize_response_node(state: ClinicalState) -> dict:
             "\n\nLưu ý: kháng sinh bôi (như clindamycin, erythromycin) thường không nên dùng đơn độc; "
             "thường phối hợp với benzoyl peroxide để giảm nguy cơ kháng kháng sinh."
         )
-        disclaimer = "Thông tin này chỉ mang tính tham khảo và không thay thế tư vấn y khoa chuyên nghiệp."
+        disclaimer = "Thông tin mang tính tham khảo và không thay thế chẩn đoán của bác sĩ."
         if disclaimer in draft:
             draft = draft.replace(disclaimer, abx_warning + "\n\n" + disclaimer)
         else:
@@ -690,39 +718,22 @@ async def finalize_response_node(state: ClinicalState) -> dict:
     draft = _dedupe_section_headings(draft)
     draft = re.sub(r"\n{3,}", "\n\n", draft).strip()
 
-    disclaimer = "Thông tin này chỉ mang tính tham khảo và không thay thế tư vấn y khoa chuyên nghiệp."
-    draft = draft.replace(f"\n\n{disclaimer}", "")
-    draft = draft.replace(disclaimer, "")
+    disclaimer = "Thông tin mang tính tham khảo và không thay thế chẩn đoán của bác sĩ."
+    legacy_disclaimer = "Thông tin này chỉ mang tính tham khảo và không thay thế tư vấn y khoa chuyên nghiệp."
+    for disclaimer_text in [disclaimer, legacy_disclaimer]:
+        draft = draft.replace(f"\n\n{disclaimer_text}", "")
+        draft = draft.replace(disclaimer_text, "")
 
-    required_headings = [
-        "**Tóm tắt ngắn**",
-        "**Giải thích/cơ chế**",
-        "**Chăm sóc/điều trị thường gặp**",
-        "**Lưu ý an toàn/tác dụng phụ**",
-        "**Khi nào nên gặp bác sĩ**",
-        "**Lưu ý**",
-    ]
-    if not all(heading in draft for heading in required_headings) and not _has_sufficient_answer_structure(draft):
-        draft = (
-            "**Tóm tắt ngắn**\n"
-            + (draft or "Tôi chưa có đủ thông tin để trả lời chi tiết.")
-            + "\n\n**Giải thích/cơ chế**\n"
-            "Thông tin trả lời dựa trên phần tài liệu y khoa và kiến thức liên hệ đã truy xuất.\n\n"
-            "**Chăm sóc/điều trị thường gặp**\n"
-            "Không tự ý dùng thuốc kê đơn hoặc phối hợp nhiều hoạt chất mạnh nếu chưa có hướng dẫn chuyên môn.\n\n"
-            "**Lưu ý an toàn/tác dụng phụ**\n"
-            "Theo dõi kích ứng, đau rát, phản ứng dị ứng hoặc các triệu chứng toàn thân bất thường.\n\n"
-            "**Khi nào nên gặp bác sĩ**\n"
-            "Nên gặp bác sĩ da liễu nếu mụn kéo dài, viêm đau, để lại sẹo hoặc không đáp ứng với chăm sóc cơ bản.\n\n"
-            "**Lưu ý**\n"
-        )
+    if not draft:
+        draft = "Tôi chưa có đủ thông tin để trả lời chi tiết."
     elif "**Lưu ý**" in draft:
         before_note, note, after_note = draft.partition("**Lưu ý**")
         draft = before_note.rstrip() + "\n\n" + note + "\n" + after_note.strip()
 
     draft = re.sub(r"(\*\*Lưu ý\*\*)\s*[-–]\s*$", r"\1", draft, flags=re.MULTILINE).rstrip()
     draft = _dedupe_section_headings(draft)
-    draft = draft.rstrip() + "\n" + disclaimer
+    draft = normalize_answer_markdown(draft, disclaimer=disclaimer)
+    draft = draft.rstrip() + "\n\n" + disclaimer
     
     logger.debug("Finalizing response.")
     return {"final_answer": repair_mojibake(draft.strip())}

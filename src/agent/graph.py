@@ -217,11 +217,14 @@ async def run_clinical_agent(
         "llm_provider": llm_provider,
         "llm_model": llm_model,
         "allow_model_fallback": allow_model_fallback,
+        "requested_provider": None,
+        "requested_model": None,
         "actual_provider": None,
         "actual_model": None,
         "llm_fallback_used": False,
         "fallback_provider": None,
         "fallback_model": None,
+        "fallback_chain": None,
         "bypass_cache": bypass_cache
     }
     
@@ -276,9 +279,12 @@ async def run_clinical_agent(
         "cache_metadata": final_state.get("cache_metadata"),
         "llm_fallback": final_state.get("llm_fallback"),
         "fallback_reason": final_state.get("fallback_reason"),
+        "requested_provider": final_state.get("requested_provider"),
+        "requested_model": final_state.get("requested_model"),
         "actual_provider": final_state.get("actual_provider"),
         "actual_model": final_state.get("actual_model"),
         "llm_fallback_used": final_state.get("llm_fallback_used"),
         "fallback_provider": final_state.get("fallback_provider"),
-        "fallback_model": final_state.get("fallback_model")
+        "fallback_model": final_state.get("fallback_model"),
+        "fallback_chain": final_state.get("fallback_chain")
     }

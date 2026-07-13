@@ -394,11 +394,15 @@ async def generate_answer_node(state: ClinicalState) -> dict:
                 for ctx in answer_contexts
                 if ctx.get("source_file")
             ))[:2] or state.get("sources", [])[:2],
+            "requested_provider": response_data.get("requested_provider"),
+            "requested_model": response_data.get("requested_model"),
             "actual_provider": response_data["provider"],
             "actual_model": response_data["model"],
             "llm_fallback_used": response_data["fallback_used"],
             "fallback_provider": response_data["fallback_provider"],
             "fallback_model": response_data["fallback_model"],
+            "fallback_reason": response_data.get("fallback_reason"),
+            "fallback_chain": response_data.get("fallback_chain"),
             "runtime_resilience": {
                 **(state.get("runtime_resilience") or {}),
                 "llm": response_data.get("resilience"),

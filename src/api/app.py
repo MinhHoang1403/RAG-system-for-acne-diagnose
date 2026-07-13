@@ -213,9 +213,12 @@ class ChatCacheMetadata(BaseModel):
 class ChatMetadata(BaseModel):
     provider: str
     model: str
+    requested_provider: Optional[str] = None
+    requested_model: Optional[str] = None
     fallback_used: bool
     fallback_provider: Optional[str] = None
     fallback_model: Optional[str] = None
+    fallback_chain: Optional[list[dict[str, Any]]] = None
     retrieval: str
     is_in_domain: Optional[bool] = None
     guardrail: Optional[str] = None
@@ -451,11 +454,14 @@ async def retrieve_endpoint(q: str, top_k: int = 5):
 async def list_models():
     """List available LLM models."""
     from src.agent.llm.ollama_client import list_ollama_models
+    from src.agent.llm.provider import DEFAULT_GEMINI_MODEL, parse_google_fallback_models
     
     ollama_models = await list_ollama_models()
-    gemini_model = os.getenv("GOOGLE_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
+    gemini_model = os.getenv("GOOGLE_MODEL", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+    if gemini_model == "gemini-1.5-flash":
+        gemini_model = DEFAULT_GEMINI_MODEL
+    gemini_fallback_models = parse_google_fallback_models(primary_model=gemini_model)
     qwen3_8b_available = "qwen3:8b" in ollama_models
-    qwen3_available = "qwen3:latest" in ollama_models
 
     def model_entry(
         *,
@@ -477,40 +483,58 @@ async def list_models():
             "is_default": is_default,
         }
     
+    models = [
+        model_entry(
+            provider="gemini",
+            model_id=gemini_model,
+            display_name=_display_name_for_model(gemini_model),
+            model_type="cloud",
+            available=True,
+            is_default=True,
+        ),
+    ]
+    models.extend(
+        model_entry(
+            provider="gemini",
+            model_id=fallback_model,
+            display_name=_display_name_for_model(fallback_model),
+            model_type="cloud",
+            available=True,
+            is_default=False,
+        )
+        for fallback_model in gemini_fallback_models
+    )
+    models.append(
+        model_entry(
+            provider="ollama",
+            model_id="qwen3:8b",
+            display_name="Qwen3 8B Local",
+            model_type="local",
+            available=qwen3_8b_available,
+        )
+    )
+
+    seen_model_keys: set[tuple[str, str]] = set()
+    deduped_models: list[dict[str, Any]] = []
+    for item in models:
+        key = (item["provider"], item["model_id"])
+        if key in seen_model_keys:
+            continue
+        seen_model_keys.add(key)
+        deduped_models.append(item)
+
     return {
         "default_provider": "gemini",
         "default_model": gemini_model,
         "default_model_id": gemini_model,
-        "models": [
-            model_entry(
-                provider="gemini",
-                model_id=gemini_model,
-                display_name=_display_name_for_model(gemini_model),
-                model_type="cloud",
-                available=True,
-                is_default=True,
-            ),
-            model_entry(
-                provider="ollama",
-                model_id="qwen3:8b",
-                display_name="Qwen3 8B Local",
-                model_type="local",
-                available=qwen3_8b_available,
-            ),
-            model_entry(
-                provider="ollama",
-                model_id="qwen3:latest",
-                display_name="Qwen3 Local",
-                model_type="local",
-                available=qwen3_available,
-            ),
-        ]
+        "models": deduped_models,
     }
 
 
 def _display_name_for_model(model_id: str) -> str:
     aliases = {
         "gemini-3.5-flash": "Gemini 3.5 Flash",
+        "gemini-3.1-flash-lite": "Gemini 3.1 Flash-Lite",
         "gemini-2.5-flash": "Gemini 2.5 Flash",
     }
     return aliases.get(model_id, model_id)
@@ -709,9 +733,13 @@ async def chat_endpoint(request: ChatRequest):
         safe_db_metadata = {
             "provider": result.get("actual_provider") or request.llm_provider or "gemini",
             "model": result.get("actual_model") or request.llm_model or model_name,
+            "requested_provider": result.get("requested_provider") or request.llm_provider or "gemini",
+            "requested_model": result.get("requested_model") or request.llm_model or model_name,
             "fallback_used": result.get("llm_fallback_used", False),
             "fallback_provider": result.get("fallback_provider"),
             "fallback_model": result.get("fallback_model"),
+            "fallback_reason": result.get("fallback_reason"),
+            "fallback_chain": result.get("fallback_chain"),
             "retrieval": retrieval_status,
             "is_in_domain": is_in_domain,
             "guardrail": result.get("guardrail"),
@@ -805,9 +833,12 @@ async def chat_endpoint(request: ChatRequest):
             metadata=ChatMetadata(
                 provider=result.get("actual_provider") or request.llm_provider or "gemini",
                 model=result.get("actual_model") or request.llm_model or model_name,
+                requested_provider=result.get("requested_provider") or request.llm_provider or "gemini",
+                requested_model=result.get("requested_model") or request.llm_model or model_name,
                 fallback_used=result.get("llm_fallback_used", False),
                 fallback_provider=result.get("fallback_provider"),
                 fallback_model=result.get("fallback_model"),
+                fallback_chain=result.get("fallback_chain"),
                 retrieval=retrieval_status,
                 is_in_domain=is_in_domain,
                 guardrail=result.get("guardrail"),

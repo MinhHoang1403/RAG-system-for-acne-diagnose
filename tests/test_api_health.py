@@ -43,6 +43,7 @@ async def test_models_exposes_current_qwen3_8b_default(monkeypatch):
         return ["qwen3:8b"]
 
     monkeypatch.setenv("GOOGLE_MODEL", "gemini-3.5-flash")
+    monkeypatch.setenv("GOOGLE_FALLBACK_MODELS", "gemini-3.1-flash-lite")
     monkeypatch.setattr(
         "src.agent.llm.ollama_client.list_ollama_models",
         fake_list_ollama_models,
@@ -59,5 +60,89 @@ async def test_models_exposes_current_qwen3_8b_default(monkeypatch):
     assert response.json()["default_model"] == "gemini-3.5-flash"
     assert by_model["gemini-3.5-flash"]["display_name"] == "Gemini 3.5 Flash"
     assert by_model["gemini-3.5-flash"]["is_default"] is True
+    assert by_model["gemini-3.1-flash-lite"]["display_name"] == "Gemini 3.1 Flash-Lite"
+    assert by_model["gemini-3.1-flash-lite"]["is_default"] is False
     assert by_model["qwen3:8b"]["available"] is True
     assert "qwen2.5:latest" not in by_model
+    assert len(by_model) == len(models)
+
+
+@pytest.mark.asyncio
+async def test_chat_metadata_exposes_requested_and_actual_model(monkeypatch):
+    async def fake_run_clinical_agent(**kwargs):
+        assert kwargs["llm_provider"] == "gemini"
+        assert kwargs["llm_model"] == "gemini-3.5-flash"
+        return {
+            "answer": "Benzoyl peroxide không phải là kháng sinh.",
+            "session_id": kwargs["session_id"],
+            "sources": ["fixture.pdf"],
+            "symptoms": [],
+            "safety_flags": [],
+            "graph_facts": [],
+            "retrieval_status": "hybrid",
+            "fallback_applied": False,
+            "fallback_type": "none",
+            "fallback_cache_eligible": True,
+            "is_in_domain": True,
+            "guardrail": "in_domain",
+            "cache_checked": True,
+            "cache_hit": False,
+            "cache_reason": "miss",
+            "cache_metadata": {},
+            "requested_provider": "gemini",
+            "requested_model": "gemini-3.5-flash",
+            "actual_provider": "gemini",
+            "actual_model": "gemini-3.1-flash-lite",
+            "llm_fallback_used": True,
+            "fallback_provider": "gemini",
+            "fallback_model": "gemini-3.1-flash-lite",
+            "fallback_reason": "quota_exhausted",
+            "fallback_chain": [
+                {
+                    "provider": "gemini",
+                    "model": "gemini-3.5-flash",
+                    "role": "primary",
+                    "status": "failed",
+                    "reason": "quota_exhausted",
+                },
+                {
+                    "provider": "gemini",
+                    "model": "gemini-3.1-flash-lite",
+                    "role": "fallback",
+                    "status": "success",
+                },
+            ],
+            "pipeline_manifest": {"phase": "phase2e", "answer_cache_version": "v5"},
+            "pipeline_fingerprint": "fixture-fingerprint",
+            "answer_quality_report": {"passed": True, "issues": []},
+        }
+
+    async def fake_persist_chat_to_db(**kwargs):
+        return None
+
+    monkeypatch.setattr("src.api.app.run_clinical_agent", fake_run_clinical_agent)
+    monkeypatch.setenv("RELEASE_READINESS_TEST_MODE", "")
+    monkeypatch.setattr("src.api.app._persist_chat_to_db", fake_persist_chat_to_db)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/chat",
+            json={
+                "message": "Benzoyl peroxide có phải kháng sinh không?",
+                "llm_provider": "gemini",
+                "llm_model": "gemini-3.5-flash",
+                "allow_model_fallback": True,
+            },
+        )
+
+    assert response.status_code == 200
+    metadata = response.json()["metadata"]
+    assert metadata["provider"] == "gemini"
+    assert metadata["model"] == "gemini-3.1-flash-lite"
+    assert metadata["requested_provider"] == "gemini"
+    assert metadata["requested_model"] == "gemini-3.5-flash"
+    assert metadata["fallback_used"] is True
+    assert metadata["fallback_reason"] == "quota_exhausted"
+    assert metadata["fallback_chain"][1]["model"] == "gemini-3.1-flash-lite"

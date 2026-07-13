@@ -1,0 +1,69 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { formatText } from './markdown.js';
+
+function collectByType(nodes, type, found = []) {
+  const list = Array.isArray(nodes) ? nodes : [nodes];
+  for (const node of list) {
+    if (!node || typeof node !== 'object') continue;
+    if (node.type === type) found.push(node);
+    collectByType(node.props?.children, type, found);
+  }
+  return found;
+}
+
+function collectText(nodes) {
+  if (nodes == null || nodes === false) return '';
+  if (typeof nodes === 'string' || typeof nodes === 'number') return String(nodes);
+  if (Array.isArray(nodes)) return nodes.map(collectText).join('');
+  if (typeof nodes === 'object') return collectText(nodes.props?.children);
+  return '';
+}
+
+test('formatText renders GFM table as table elements without raw pipe paragraph', () => {
+  const rendered = formatText(
+    [
+      '| Loại mụn | Đặc điểm |',
+      '|---|---|',
+      '| Mụn đầu đen | Nhân mụn mở |',
+      '| Mụn đầu trắng | Nhân mụn đóng |',
+    ].join('\n'),
+  );
+
+  assert.equal(collectByType(rendered, 'table').length, 1);
+  assert.equal(collectByType(rendered, 'th').length, 2);
+  assert.equal(collectByType(rendered, 'td').length, 4);
+  assert.equal(collectByType(rendered, 'p').length, 0);
+  assert.match(collectText(rendered), /Mụn đầu đen/);
+});
+
+test('formatText keeps provider badges and sources outside answer rendering', () => {
+  const rendered = formatText('Differin chứa adapalene và thuộc nhóm **retinoid bôi**.');
+
+  assert.equal(collectByType(rendered, 'table').length, 0);
+  assert.equal(collectByType(rendered, 'strong').length, 1);
+  assert.doesNotMatch(collectText(rendered), /Gemini|Qwen|Nguồn:/);
+});
+
+test('formatText renders headings, lists, code blocks, and safe external links', () => {
+  const rendered = formatText(
+    [
+      '## Lưu ý an toàn',
+      '- Dùng `adapalene` theo hướng dẫn.',
+      '[Nguồn ngoài](https://example.com)',
+      '```',
+      'no raw html',
+      '```',
+    ].join('\n'),
+  );
+
+  const links = collectByType(rendered, 'a');
+  assert.equal(collectByType(rendered, 'h4').length, 1);
+  assert.equal(collectByType(rendered, 'ul').length, 1);
+  assert.equal(collectByType(rendered, 'code').length, 2);
+  assert.equal(collectByType(rendered, 'pre').length, 1);
+  assert.equal(links.length, 1);
+  assert.equal(links[0].props.target, '_blank');
+  assert.equal(links[0].props.rel, 'noopener noreferrer');
+});

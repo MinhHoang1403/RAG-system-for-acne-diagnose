@@ -48,6 +48,48 @@ def test_answer_verifier_version_is_in_manifest_and_changes_fingerprint():
     assert compute_pipeline_fingerprint(old_manifest) != compute_pipeline_fingerprint(new_manifest)
 
 
+def test_answer_formatting_contract_version_is_in_manifest_and_changes_fingerprint():
+    old_manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "ANSWER_FORMATTING_CONTRACT_VERSION": "answer_formatting_contract_v0",
+        }
+    )
+    new_manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "ANSWER_FORMATTING_CONTRACT_VERSION": "answer_formatting_contract_v1",
+        }
+    )
+
+    assert new_manifest["answer_formatting_contract_version"] == "answer_formatting_contract_v1"
+    assert compute_pipeline_fingerprint(old_manifest) != compute_pipeline_fingerprint(new_manifest)
+
+
+def test_llm_fallback_policy_and_google_fallback_models_change_fingerprint():
+    old_manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "LLM_FALLBACK_POLICY_VERSION": "llm_fallback_policy_v1",
+            "GOOGLE_MODEL": "gemini-3.5-flash",
+            "GOOGLE_FALLBACK_MODELS": "",
+        }
+    )
+    new_manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "LLM_FALLBACK_POLICY_VERSION": "llm_fallback_policy_v2",
+            "GOOGLE_MODEL": "gemini-3.5-flash",
+            "GOOGLE_FALLBACK_MODELS": "gemini-3.1-flash-lite",
+        }
+    )
+
+    assert new_manifest["answer_cache_version"] == "v5"
+    assert new_manifest["llm_fallback_policy_version"] == "llm_fallback_policy_v2"
+    assert new_manifest["google_fallback_models"] == ["gemini-3.1-flash-lite"]
+    assert compute_pipeline_fingerprint(old_manifest) != compute_pipeline_fingerprint(new_manifest)
+
+
 def test_severity_guard_version_is_in_manifest_and_changes_fingerprint():
     old_manifest = build_pipeline_version_manifest(
         {
