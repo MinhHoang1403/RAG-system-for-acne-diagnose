@@ -66,7 +66,6 @@ class ClinicalState(TypedDict):
     # Error handling
     errors: list[str]
     llm_fallback: bool | None
-    fallback_reason: str | None
     
     # Cache
     cache_enabled: bool | None

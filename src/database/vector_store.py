@@ -229,11 +229,25 @@ class QdrantVectorStore(VectorStore):
         self, query_vector: list[float], top_k: int = 5, filter: dict | None = None
     ) -> list[dict[str, Any]]:
         """Semantic search using named dense vector ``"dense"``."""
+        query_filter = None
+        if filter is not None:
+            from qdrant_client import models  # type: ignore[import]
+
+            query_filter = (
+                filter
+                if isinstance(filter, models.Filter)
+                else (
+                    models.Filter.model_validate(filter)
+                    if hasattr(models.Filter, "model_validate")
+                    else models.Filter.parse_obj(filter)
+                )
+            )
         response = await self._client.query_points(
             collection_name=self._collection,
             query=query_vector,
             using="dense",
             limit=top_k,
+            query_filter=query_filter,
         )
         return [{"id": r.id, "score": r.score, **(r.payload or {})} for r in response.points]
 

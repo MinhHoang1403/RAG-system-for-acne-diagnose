@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 from dotenv import load_dotenv
@@ -10,9 +11,26 @@ load_dotenv()
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+
+def _mask_url(url: str | None) -> str:
+    if not url:
+        return "<MISSING>"
+    parts = urlsplit(url)
+    if "@" not in parts.netloc:
+        return url
+    host = parts.netloc.rsplit("@", 1)[1]
+    return urlunsplit((parts.scheme, f"***:***@{host}", parts.path, parts.query, parts.fragment))
+
+
+def _diagnostic_writes_enabled() -> bool:
+    return os.getenv("ALLOW_DIAGNOSTIC_WRITES", "").strip().lower() in {"1", "true", "yes"}
+
+
 async def main():
     url = os.getenv("DATABASE_URL")
-    print(f"DB URL: {url}")
+    print(f"DB URL: {_mask_url(url)}")
+    if not url:
+        raise RuntimeError("DATABASE_URL is not configured.")
     engine = create_async_engine(url)
     async with engine.begin() as conn:
         r = await conn.execute(text("SELECT count(*) FROM chat_sessions"))
@@ -26,7 +44,11 @@ async def main():
         
     await engine.dispose()
     
-    # Test with actual session
+    if not _diagnostic_writes_enabled():
+        print("Skipping diagnostic write test. Set ALLOW_DIAGNOSTIC_WRITES=true to enable it.")
+        return
+
+    # Test with actual session only when explicitly requested.
     session = AsyncSessionLocal()
     try:
         async with session.begin():

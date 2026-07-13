@@ -81,6 +81,29 @@ async def test_qdrant_vector_store_search_handles_missing_payload():
 
 
 @pytest.mark.asyncio
+async def test_qdrant_vector_store_search_passes_filter_to_client():
+    captured = {}
+
+    class FakeClient:
+        async def query_points(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(points=[])
+
+    store = QdrantVectorStore.__new__(QdrantVectorStore)
+    store._client = FakeClient()
+    store._collection = "acne_knowledge"
+
+    await store.search(
+        [0.0, 0.1],
+        top_k=1,
+        filter={"must": [{"key": "document_id", "match": {"value": "doc-1"}}]},
+    )
+
+    assert captured["query_filter"].must[0].key == "document_id"
+    assert captured["query_filter"].must[0].match.value == "doc-1"
+
+
+@pytest.mark.asyncio
 async def test_hybrid_retriever_close_logs_sanitized_errors(caplog):
     class BrokenComponent:
         async def close(self):

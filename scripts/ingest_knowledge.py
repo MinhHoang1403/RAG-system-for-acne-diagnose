@@ -807,16 +807,21 @@ def finalize_manifest_for_documents(
     payloads_by_chunk_id = {payload.chunk_id: payload for payload in payloads}
 
     for file_info, chunks in doc_chunks:
+        qdrant_point_ids = (
+            qdrant_point_ids_for_chunks(chunks)
+            if qdrant_ids_available
+            else []
+        )
         intentional_graph_skip = (
             skip_graph_extraction
             and skip_neo4j
             and not skip_qdrant
             and qdrant_ids_available
-            and bool(chunks)
+            and bool(qdrant_point_ids)
         )
         file_info["graph_extraction_skipped"] = bool(skip_graph_extraction)
         file_info["neo4j_skipped"] = bool(skip_neo4j)
-        file_info["qdrant_indexed"] = bool(qdrant_ids_available)
+        file_info["qdrant_indexed"] = bool(qdrant_point_ids)
 
         reasons: list[str] = []
         if not chunks:
@@ -827,6 +832,8 @@ def finalize_manifest_for_documents(
             reasons.append("skipped Neo4j")
         if skip_qdrant:
             reasons.append("skipped Qdrant")
+        if not skip_qdrant and not qdrant_point_ids:
+            reasons.append("Qdrant upsert produced no point IDs")
         if global_error:
             reasons.append(global_error)
 
@@ -855,19 +862,13 @@ def finalize_manifest_for_documents(
         elif graph_errors_within_tolerance:
             graph_warning = graph_warning_message(graph_errors, graph_tolerance)
 
-        qdrant_point_ids = (
-            qdrant_point_ids_for_chunks(chunks)
-            if qdrant_ids_available
-            else []
-        )
-
         if reasons:
             update_manifest_after_failure(
                 manifest=manifest,
                 file_info=file_info,
                 ingestion_run_id=ingestion_run_id,
                 error="; ".join(reasons),
-            status="partial",
+                status="partial",
                 chunk_count=len(chunks),
                 qdrant_point_ids=qdrant_point_ids,
                 last_ingested_at=ingested_at,
@@ -2942,6 +2943,7 @@ async def ingest_pipeline_incremental(
             if is_web_json_source(file_info["path"]):
                 logger.info("[STAGE 1] Found JSON file: %s", file_info["path"].name)
                 chunks = stage2_chunk_web_json_file(file_info["path"], file_info)
+                display_name = str(file_info.get("source_file") or file_info["path"].name)
             else:
                 if parser is None:
                     parser = build_llamaparse_parser()
@@ -2956,6 +2958,7 @@ async def ingest_pipeline_incremental(
                     raise RuntimeError("Stage 1 extraction failed")
                 filename, markdown = parsed
                 chunks = stage2_chunk_markdown(filename, markdown)
+                display_name = filename
 
             stats.pdf_files += 1
             original_chunk_count = len(chunks)
@@ -2967,7 +2970,7 @@ async def ingest_pipeline_incremental(
                     logger.warning(
                         "[STAGE 2] Applying --limit-chunks. %s produced %d chunks; "
                         "processing only %d in this run.",
-                        filename,
+                        display_name,
                         len(chunks),
                         remaining_chunks,
                     )
@@ -3084,6 +3087,9 @@ async def ingest_pipeline_incremental(
                 skipped_components.append("Neo4j")
             if skip_qdrant:
                 skipped_components.append("Qdrant")
+            qdrant_missing_reason = None
+            if not skip_qdrant and not qdrant_point_ids:
+                qdrant_missing_reason = "Qdrant upsert produced no point IDs"
 
             graph_warning = None
             graph_errors_within_tolerance = (
@@ -3096,7 +3102,12 @@ async def ingest_pipeline_incremental(
             if graph_errors_within_tolerance:
                 graph_warning = graph_warning_message(graph_errors, graph_tolerance)
 
-            if limit_chunks_used_for_doc or skipped_components or (graph_errors > 0 and not graph_errors_within_tolerance):
+            if (
+                limit_chunks_used_for_doc
+                or skipped_components
+                or qdrant_missing_reason
+                or (graph_errors > 0 and not graph_errors_within_tolerance)
+            ):
                 reasons = []
                 if limit_chunks_used_for_doc:
                     reasons.append(
@@ -3106,6 +3117,8 @@ async def ingest_pipeline_incremental(
                     )
                 if skipped_components:
                     reasons.append("skipped " + ", ".join(skipped_components))
+                if qdrant_missing_reason:
+                    reasons.append(qdrant_missing_reason)
                 if graph_errors > 0 and not graph_errors_within_tolerance:
                     reasons.append(
                         f"graph extraction failed for {graph_errors} chunk(s); "

@@ -551,6 +551,8 @@ async def test_chat_response_exposes_fallback_metadata(monkeypatch):
     response = await chat_endpoint(ChatRequest(message="mụn đầu đen", user_id="u1"))
 
     assert response.metadata.retrieval_status == "no_evidence"
+    assert response.metadata.provider == "system"
+    assert response.metadata.model is None
     assert response.metadata.fallback_applied is True
     assert response.metadata.fallback_type == "no_retrieval_evidence"
     assert response.metadata.cache.reason == "safe_fallback_no_retrieval_evidence"
