@@ -14,6 +14,10 @@ function splitTableRow(line) {
   return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
 }
 
+function isSafeLinkHref(href) {
+  return /^https?:\/\//i.test(href);
+}
+
 function renderInline(text, keyPrefix) {
   const parts = String(text).split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g).filter((part) => part !== '');
   return parts.map((part, index) => {
@@ -26,13 +30,16 @@ function renderInline(text, keyPrefix) {
     const linkMatch = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
     if (linkMatch) {
       const href = linkMatch[2].trim();
-      const isExternal = /^https?:\/\//i.test(href);
+      if (!isSafeLinkHref(href)) {
+        return linkMatch[1];
+      }
       return React.createElement(
         'a',
         {
           key: `${keyPrefix}-link-${index}`,
           href,
-          ...(isExternal ? { target: '_blank', rel: 'noopener noreferrer' } : {}),
+          target: '_blank',
+          rel: 'noopener noreferrer',
         },
         linkMatch[1],
       );

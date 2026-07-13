@@ -43,8 +43,8 @@ thế bác sĩ da liễu hoặc chuyên gia y tế.
 
 Checkpoint ổn định:
 
-- Tag: `phase1-phase2-hardening-final-pass`
-- Commit: `387cc90`
+- Tag: `checkpoint-audit11-pass`
+- Commit: `a96a7a2`
 
 | Khu vực | Trạng thái | Nội dung chính | Script xác minh |
 |---|---|---|---|
@@ -167,7 +167,7 @@ Runtime đã xác minh đang dùng:
 
 ## Trạng thái knowledge base hiện tại
 
-Trạng thái đã xác minh tại tag `phase1-phase2-hardening-final-pass`:
+Trạng thái đã xác minh tại tag `checkpoint-audit11-pass`:
 
 | Thành phần | Trạng thái đã xác minh |
 |---|---|
@@ -816,8 +816,8 @@ Google GenAI SDK:
 
 Snapshot tại thời điểm README được cập nhật:
 
-- Tag: `phase1-phase2-hardening-final-pass`
-- Commit: `387cc90`
+- Tag: `checkpoint-audit11-pass`
+- Commit: `a96a7a2`
 - Phase 1 validation: PASS
 - Phase 2 all-eval: PASS 11/11
 - Offline runtime smoke: PASS 8/8

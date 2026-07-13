@@ -212,7 +212,7 @@ class ChatCacheMetadata(BaseModel):
 
 class ChatMetadata(BaseModel):
     provider: str
-    model: str
+    model: Optional[str] = None
     requested_provider: Optional[str] = None
     requested_model: Optional[str] = None
     fallback_used: bool
@@ -245,6 +245,17 @@ class ChatResponse(BaseModel):
     safety_flags: list[str] = Field(default_factory=list)
     graph_facts: list[dict[str, Any]] = Field(default_factory=list)
     metadata: ChatMetadata
+
+
+def _chat_metadata_identity(
+    result: dict[str, Any],
+    request: ChatRequest,
+    default_model: str,
+) -> tuple[str, Optional[str]]:
+    provider = result.get("actual_provider") or request.llm_provider or "gemini"
+    if provider == "system" and result.get("actual_model") is None:
+        return provider, None
+    return provider, result.get("actual_model") or request.llm_model or default_model
 
 
 class RetrieveResponse(BaseModel):
@@ -729,10 +740,16 @@ async def chat_endpoint(request: ChatRequest):
                 },
             }
         
+        response_provider, response_model = _chat_metadata_identity(
+            result,
+            request,
+            model_name,
+        )
+
         # Build safe metadata dict for DB storage (no API keys, no raw exceptions)
         safe_db_metadata = {
-            "provider": result.get("actual_provider") or request.llm_provider or "gemini",
-            "model": result.get("actual_model") or request.llm_model or model_name,
+            "provider": response_provider,
+            "model": response_model,
             "requested_provider": result.get("requested_provider") or request.llm_provider or "gemini",
             "requested_model": result.get("requested_model") or request.llm_model or model_name,
             "fallback_used": result.get("llm_fallback_used", False),
@@ -831,8 +848,8 @@ async def chat_endpoint(request: ChatRequest):
             safety_flags=safety_flags_list,
             graph_facts=safe_graph_facts,
             metadata=ChatMetadata(
-                provider=result.get("actual_provider") or request.llm_provider or "gemini",
-                model=result.get("actual_model") or request.llm_model or model_name,
+                provider=response_provider,
+                model=response_model,
                 requested_provider=result.get("requested_provider") or request.llm_provider or "gemini",
                 requested_model=result.get("requested_model") or request.llm_model or model_name,
                 fallback_used=result.get("llm_fallback_used", False),

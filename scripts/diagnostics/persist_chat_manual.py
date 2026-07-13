@@ -8,7 +8,15 @@ from dotenv import load_dotenv
 load_dotenv()
 from src.api.app import _persist_chat_to_db
 
+
+def _diagnostic_writes_enabled() -> bool:
+    return os.getenv("ALLOW_DIAGNOSTIC_WRITES", "").strip().lower() in {"1", "true", "yes"}
+
+
 async def test():
+    if not _diagnostic_writes_enabled():
+        print("Skipping manual chat persistence. Set ALLOW_DIAGNOSTIC_WRITES=true to enable it.")
+        return
     try:
         await _persist_chat_to_db(
             session_id='test-123',

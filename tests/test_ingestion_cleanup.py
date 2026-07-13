@@ -236,3 +236,39 @@ def test_manifest_completed_with_graph_skipped_when_qdrant_indexed(tmp_path) -> 
     assert record["qdrant_indexed"] is True
     assert record["qdrant_point_count"] == 1
     assert "error_message" not in record
+
+
+def test_manifest_partial_when_qdrant_upsert_has_no_point_ids(tmp_path) -> None:
+    source = tmp_path / "doc.pdf"
+    source.write_bytes(b"same")
+    file_info = _file_manifest_info(source)
+    chunk = SemanticChunk(
+        source_file=source.name,
+        chunk_index=0,
+        text="References only.",
+        metadata={
+            "document_id": file_info["document_id"],
+            "source_path": file_info["source_path"],
+            "is_noisy": True,
+        },
+    )
+    payload = GraphPayload(chunk_id=chunk.chunk_id, extraction_error=False)
+    manifest = {"documents": {}}
+
+    finalize_manifest_for_documents(
+        manifest=manifest,
+        doc_chunks=[(file_info, [chunk])],
+        payloads=[payload],
+        ingestion_run_id="run-1",
+        ingested_at="2026-07-05T00:00:00+00:00",
+        skip_neo4j=False,
+        skip_qdrant=False,
+        skip_graph_extraction=False,
+        qdrant_ids_available=True,
+        limit_chunks_truncated=False,
+    )
+
+    record = manifest["documents"][file_info["source_path"]]
+    assert record["status"] == "partial"
+    assert record["qdrant_point_count"] == 0
+    assert "Qdrant upsert produced no point IDs" in record["error_message"]
