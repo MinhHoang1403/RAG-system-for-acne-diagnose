@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -56,6 +59,30 @@ def test_release_checker_invalid_env_fixture_fails(tmp_path: Path) -> None:
     assert report["passed"] is False
     assert "CACHE_ANSWER_VERSION" in report["missing"]
     assert "END_TO_END_RELEASE_READINESS_VERSION" in report["missing"]
+
+
+def test_release_checker_utf8_stdio_survives_cp1252_console() -> None:
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "cp1252"
+    code = (
+        "from scripts.check_release_readiness import _configure_utf8_stdio; "
+        "_configure_utf8_stdio(); "
+        "print('mụn viêm đỏ, đau và sưng')"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+
+    stderr = completed.stderr.decode("utf-8", errors="replace")
+    stdout = completed.stdout.decode("utf-8", errors="replace")
+    assert completed.returncode == 0
+    assert "UnicodeEncodeError" not in stderr
+    assert "mụn viêm đỏ" in stdout
 
 
 @pytest.mark.asyncio
