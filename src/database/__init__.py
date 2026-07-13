@@ -1,20 +1,7 @@
 """
-src/database – Database Access Layer
+Database access layer for Acne Advisor AI.
 
-Manages all persistent storage: SQL (PostgreSQL + pgvector) and vector DB.
-
-Structure
----------
-connection.py       – Engine and session factory (SQLAlchemy async)
-models/             – SQLAlchemy ORM model definitions
-  __init__.py       – Exports `metadata` (MetaData) for schema creation
-  base.py           – Declarative base and shared mixins
-  conversation.py   – Conversation and message models
-  document.py       – Ingested document metadata models
-  embedding.py      – pgvector embedding table (when VECTOR_DB_PROVIDER=pgvector)
-repositories/       – Repository pattern: thin data-access wrappers
-  conversation.py
-  document.py
-vector_store.py     – VectorStore abstraction (Qdrant / pgvector backend)
-migrations/         – Alembic migration scripts
+The active runtime uses PostgreSQL chat-history models/repositories, Neo4j graph
+queries, Redis cache helpers, and a Qdrant-backed VectorStore abstraction. The
+pgvector class remains a placeholder behind the same interface.
 """

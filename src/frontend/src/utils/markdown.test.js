@@ -67,3 +67,12 @@ test('formatText renders headings, lists, code blocks, and safe external links',
   assert.equal(links[0].props.target, '_blank');
   assert.equal(links[0].props.rel, 'noopener noreferrer');
 });
+
+test('formatText renders unsafe markdown links as plain text', () => {
+  const rendered = formatText('[Không mở](javascript:alert(1)) và [data](data:text/html,bad)');
+
+  assert.equal(collectByType(rendered, 'a').length, 0);
+  assert.match(collectText(rendered), /Không mở/);
+  assert.match(collectText(rendered), /data/);
+  assert.doesNotMatch(collectText(rendered), /javascript:|data:text/);
+});
