@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Any
 
+from src.agent.answer_formatting import finalize_answer_presentation, infer_response_profile
 from src.agent.state import ClinicalState
 from src.quality.answer_verifier import apply_answer_guard
 from src.quality.safe_fallback import sanitize_fallback_reason
@@ -59,6 +60,21 @@ async def answer_quality_node(state: ClinicalState) -> dict[str, Any]:
             mode=guard_mode,
         )
         severity_guard = apply_severity_aware_answer_guard(query=query, answer=guard.answer)
+        response_profile = state.get("response_profile") or infer_response_profile(
+            query,
+            severity=severity_guard.classification.severity,
+            guardrail=state.get("guardrail"),
+            fallback_type=state.get("fallback_type") if state.get("fallback_applied") else None,
+        )
+        presented_answer = finalize_answer_presentation(
+            severity_guard.answer,
+            user_question=query,
+            response_profile=response_profile,
+            severity=severity_guard.classification.severity,
+            guardrail=state.get("guardrail"),
+            fallback_type=state.get("fallback_type") if state.get("fallback_applied") else None,
+            add_disclaimer=response_profile != "out_of_domain_emergency",
+        )
         report_data = guard.report.model_dump(mode="json")
         severity_data = severity_guard.classification.model_dump(mode="json")
         report_data.setdefault("metadata", {})
@@ -88,7 +104,7 @@ async def answer_quality_node(state: ClinicalState) -> dict[str, Any]:
             severity_guard.modified,
         )
         return {
-            "final_answer": severity_guard.answer,
+            "final_answer": presented_answer,
             "answer_quality_report": report_data,
             "answer_guard_modified": guard.modified or severity_guard.modified,
             "answer_guard_mode": guard_mode,
@@ -96,6 +112,7 @@ async def answer_quality_node(state: ClinicalState) -> dict[str, Any]:
             "severity_guard": severity_data,
             "severity_guard_modified": severity_guard.modified,
             "severity_guard_cache_eligible": severity_guard.cache_eligible,
+            "response_profile": response_profile,
         }
     except Exception as exc:
         safe_error = sanitize_fallback_reason(exc)

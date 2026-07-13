@@ -13,7 +13,7 @@ DEFAULT_RERANKER_VERSION = "reranker_pipeline_v2"
 DEFAULT_GOOGLE_GENAI_SDK_VERSION = "google_genai_sdk_v1"
 DEFAULT_REPRODUCIBLE_ENVIRONMENT_VERSION = "reproducible_environment_v1"
 DEFAULT_END_TO_END_RELEASE_READINESS_VERSION = "end_to_end_release_readiness_v1"
-DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v1"
+DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v2"
 DEFAULT_LLM_FALLBACK_POLICY_VERSION = "llm_fallback_policy_v2"
 LEGACY_ANSWER_CACHE_VERSIONS = {"v1", "v2", "v3", "v4"}
 

@@ -58,11 +58,11 @@ def test_answer_formatting_contract_version_is_in_manifest_and_changes_fingerpri
     new_manifest = build_pipeline_version_manifest(
         {
             "CACHE_ANSWER_VERSION": "v5",
-            "ANSWER_FORMATTING_CONTRACT_VERSION": "answer_formatting_contract_v1",
+            "ANSWER_FORMATTING_CONTRACT_VERSION": "answer_formatting_contract_v2",
         }
     )
 
-    assert new_manifest["answer_formatting_contract_version"] == "answer_formatting_contract_v1"
+    assert new_manifest["answer_formatting_contract_version"] == "answer_formatting_contract_v2"
     assert compute_pipeline_fingerprint(old_manifest) != compute_pipeline_fingerprint(new_manifest)
 
 

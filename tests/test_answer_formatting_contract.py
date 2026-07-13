@@ -5,8 +5,11 @@ import pytest
 from src.agent.answer_formatting import (
     ANSWER_FORMATTING_CONTRACT,
     ANSWER_FORMATTING_CONTRACT_VERSION,
+    assess_structural_quality,
     answer_format_instruction_for_question,
+    finalize_answer_presentation,
     normalize_answer_markdown,
+    strip_leading_question_echo,
 )
 from src.agent.nodes import reason as reason_node
 from src.agent.nodes.respond import finalize_response_node
@@ -23,10 +26,10 @@ def test_formatting_contract_avoids_mandatory_boilerplate_sections():
         graph_facts=[],
     )
 
-    assert ANSWER_FORMATTING_CONTRACT_VERSION == "answer_formatting_contract_v1"
+    assert ANSWER_FORMATTING_CONTRACT_VERSION == "answer_formatting_contract_v2"
     assert ANSWER_FORMATTING_CONTRACT in prompt
-    assert "không dùng một template dài cho mọi trường hợp" in prompt
-    assert "Không tự nối template nhiều mục vào mọi câu trả lời" in prompt
+    assert "ANSWER PRESENTATION CONTRACT V2" in prompt
+    assert "provider không được quyết định format" in prompt
     assert "3-5 đoạn ngắn gồm tóm tắt" not in prompt
     assert "Mục **Lưu ý** phải có câu" not in prompt
 
@@ -111,9 +114,7 @@ async def test_finalize_blackhead_whitehead_comparison_uses_table():
 
     answer = result["final_answer"]
     assert answer.startswith("Mụn đầu đen và mụn đầu trắng")
-    assert "| Loại mụn | Khác biệt chính | Ý nghĩa chăm sóc |" in answer
-    assert "| Mụn đầu đen |" in answer
-    assert "| Mụn đầu trắng |" in answer
+    assert "| Tiêu chí | Mụn đầu đen | Mụn đầu trắng |" in answer
     assert "**Tóm tắt ngắn**" not in answer
 
 
@@ -149,7 +150,7 @@ async def test_finalize_epiduo_composition_covers_both_ingredients():
     )
 
     answer = result["final_answer"]
-    assert answer.startswith("Có. Epiduo chứa hai hoạt chất")
+    assert answer.startswith("Có. Epiduo chứa")
     assert "adapalene" in answer
     assert "benzoyl peroxide" in answer
     assert "không phải kháng sinh" in answer
@@ -168,8 +169,8 @@ async def test_finalize_pregnancy_safety_preserves_warning():
     )
 
     answer = result["final_answer"]
-    assert "không nên tự dùng retinoid" in answer
-    assert "bác sĩ da liễu/sản khoa" in answer
+    assert answer.startswith("Không nên dùng adapalene")
+    assert "bác sĩ da liễu hoặc sản khoa" in answer
     assert answer.count("Thông tin mang tính tham khảo") == 1
 
 
@@ -191,7 +192,7 @@ async def test_finalize_severe_acne_keeps_escalation():
     answer = result["final_answer"]
     assert "bác sĩ da liễu" in answer
     assert "sẹo" in answer
-    assert "Không tự nặn" in answer
+    assert "Không nặn" in answer
     assert "Thông tin trả lời dựa trên phần tài liệu y khoa" not in answer
 
 
@@ -202,6 +203,68 @@ def test_safe_fallback_format_is_short_and_not_cache_boilerplate():
     assert answer.count("**Tóm tắt ngắn**") == 1
     assert "Thông tin trả lời dựa trên phần tài liệu y khoa" not in answer
     assert len(answer.split()) < 90
+
+
+def test_strip_leading_question_echo_exact_and_partial():
+    question = "Tôi có nhiều cục mụn sâu, đau, sưng đỏ và bắt đầu để lại sẹo. Tôi nên làm gì?"
+
+    exact = strip_leading_question_echo(question + "\n\nBạn nên khám da liễu sớm.", question)
+    partial = strip_leading_question_echo("Tôi nên làm gì?\nBạn nên khám da liễu sớm.", question)
+
+    assert exact.startswith("Bạn nên khám")
+    assert partial.startswith("Bạn nên khám")
+
+
+def test_finalizer_removes_empty_heading_duplicate_disclaimer_and_legacy_template():
+    answer = finalize_answer_presentation(
+        (
+            "**Tóm tắt ngắn**\nNên chăm sóc da dịu nhẹ.\n\n"
+            "**Giải thích/cơ chế**\nMụn viêm liên quan phản ứng viêm.\n\n"
+            "**Chăm sóc/điều trị thường gặp**\nRửa mặt nhẹ.\n\n"
+            "**Lưu ý an toàn/tác dụng phụ**\nTheo dõi kích ứng.\n\n"
+            "**Khi nào nên gặp bác sĩ**\n\n"
+            "Thông tin mang tính tham khảo và không thay thế chẩn đoán của bác sĩ.\n\n"
+            "Thông tin mang tính tham khảo và không thay thế chẩn đoán của bác sĩ."
+        ),
+        user_question="Mụn viêm nhẹ nên chăm sóc da hằng ngày như thế nào?",
+        response_profile="treatment",
+    )
+
+    assert "**Tóm tắt ngắn**" not in answer
+    assert "**Khi nào nên gặp bác sĩ**" not in answer
+    assert answer.count("Thông tin mang tính tham khảo") == 1
+
+
+def test_structural_quality_detects_incomplete_and_truncated_output():
+    issues = assess_structural_quality(
+        "Mụn viêm có thể làm da nhạy cảm với ánh nắng",
+        user_question="Mụn viêm nhẹ nên chăm sóc da hằng ngày như thế nào?",
+    )
+    codes = {issue["code"] for issue in issues}
+
+    assert "incomplete_terminal_sentence" in codes
+
+    truncated = assess_structural_quality("Câu trả lời\n...[truncated_generation]", user_question="Mụn là gì?")
+    assert "truncated_generation" in {issue["code"] for issue in truncated}
+
+
+def test_non_boolean_composition_does_not_start_with_yes_prefix():
+    answer = finalize_answer_presentation(
+        "Có. Epiduo chứa adapalene và benzoyl peroxide.",
+        user_question="Epiduo gồm những hoạt chất nào và mỗi hoạt chất có tác dụng gì?",
+    )
+
+    assert answer.startswith("Epiduo chứa hai hoạt chất")
+    assert not answer.startswith("Có.")
+
+
+def test_boolean_question_keeps_valid_yes_prefix():
+    answer = finalize_answer_presentation(
+        "Có. Epiduo chứa benzoyl peroxide.",
+        user_question="Epiduo có BPO không?",
+    )
+
+    assert answer.startswith("Có.")
 
 
 @pytest.mark.parametrize("provider", ["gemini", "ollama"])
