@@ -192,6 +192,41 @@ def test_bridge_to_legacy_contexts_preserves_prompt_fields():
     assert contexts[1]["context_role"] == "supporting_evidence"
 
 
+def test_comparison_context_keeps_all_primary_entity_cards():
+    normalized = normalize_query("Differin và Epiduo khác nhau ở thành phần nào?")
+    candidates = [
+        _chunk(
+            f"chunk:{index}",
+            f"General comparison evidence {index} about adapalene and benzoyl peroxide.",
+            active_ingredient=["adapalene", "benzoyl_peroxide"],
+            query_intent_hint=["comparison"],
+        )
+        for index in range(5)
+    ]
+    candidates.extend(
+        [
+            _entity(
+                "drug_product:differin",
+                "Differin",
+                active_ingredients=["adapalene"],
+                aliases=["differin"],
+            ),
+            _entity(
+                "drug_product:epiduo",
+                "Epiduo",
+                active_ingredients=["adapalene", "benzoyl_peroxide"],
+                aliases=["epiduo"],
+            ),
+        ]
+    )
+
+    packed = pack_context(normalized, candidates, max_items=5)
+    selected_entity_ids = packed.debug["pack_trace"]["selected_entity_ids"]
+
+    assert "drug_product:differin" in selected_entity_ids
+    assert "drug_product:epiduo" in selected_entity_ids
+
+
 def test_pack_context_drops_near_duplicate_long_text_but_keeps_safety_evidence():
     normalized = normalize_query("Retinoid có dùng khi mang thai không?")
     duplicate_text = "Retinoids require pregnancy safety counseling and contraception. " * 8

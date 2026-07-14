@@ -158,6 +158,28 @@ async def test_finalize_epiduo_composition_covers_both_ingredients():
 
 
 @pytest.mark.asyncio
+async def test_finalize_retinoid_shared_class_repairs_wrong_negative_generation():
+    result = await finalize_response_node(
+        {
+            "user_question": "Adapalene, tretinoin và isotretinoin có cùng nhóm thuốc không?",
+            "draft_answer": (
+                "Không, adapalene, tretinoin và isotretinoin không thuộc cùng một nhóm thuốc. "
+                "Sự khác biệt giữa các hoạt chất này rất lớn."
+            ),
+            "conversation_history": [],
+            "use_history_context": False,
+            "is_in_domain": True,
+        }
+    )
+
+    answer = result["final_answer"]
+    assert answer.startswith("Có. Các hoạt chất này đều thuộc nhóm retinoid")
+    assert "khác đường dùng" in answer
+    assert "không thuộc cùng một nhóm" not in answer
+    assert "| Hoạt chất | Nhóm chung | Điểm cần phân biệt |" in answer
+
+
+@pytest.mark.asyncio
 async def test_finalize_pregnancy_safety_preserves_warning():
     result = await finalize_response_node(
         {
@@ -269,6 +291,19 @@ def test_non_boolean_composition_does_not_start_with_yes_prefix():
     assert not answer.startswith("Có.")
 
 
+def test_differin_epiduo_comparison_does_not_collapse_to_epiduo_only():
+    answer = finalize_answer_presentation(
+        "Epiduo chứa adapalene và benzoyl peroxide.",
+        user_question="Differin và Epiduo khác nhau ở thành phần nào?",
+    )
+
+    assert "Differin" in answer
+    assert "Epiduo" in answer
+    assert "adapalene" in answer
+    assert "benzoyl peroxide" in answer
+    assert "| Thuốc | Thành phần chính | Ý nghĩa |" in answer
+
+
 @pytest.mark.asyncio
 async def test_finalize_mild_acne_skincare_uses_bullets_and_fixed_wording():
     result = await finalize_response_node(
@@ -308,14 +343,26 @@ def test_source_metadata_keeps_raw_ids_but_exposes_friendly_display_names():
     assert [item["display_name"] for item in metadata] == [
         "Cơ sở tri thức hoạt chất",
         "Bộ dữ liệu kiến thức mụn",
-        "Guideline Acne Treatment",
+        "Tài liệu tiếng Việt về mụn trứng cá",
     ]
 
 
 def test_source_display_fallback_humanizes_without_fabricating_title():
-    displays = display_names_for_sources(["qd_4416_cut.pdf", "unknown-source"])
+    displays = display_names_for_sources(["qd_4416_cut.pdf", "PIIS0190962223033893.pdf", "unknown-source"])
 
-    assert displays == ["Qd 4416 Cut", "Unknown Source"]
+    assert displays == [
+        "Tài liệu chuyên môn về điều trị mụn",
+        "Tài liệu tiếng Việt về mụn trứng cá",
+        "Unknown Source",
+    ]
+
+
+def test_comparison_detector_handles_khac_the_nao_variant():
+    instruction = answer_format_instruction_for_question(
+        "Adapalene và benzoyl peroxide khác nhau thế nào?"
+    )
+
+    assert "CÂU SO SÁNH" in instruction
 
 
 def test_boolean_question_keeps_valid_yes_prefix():

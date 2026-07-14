@@ -59,6 +59,15 @@ def normalize_query(
 
     condition = list(expanded.get("condition") or [])
     safety_context = list(expanded.get("safety_context") or [])
+    if _has_negated_pregnancy_context(normalized_text):
+        safety_context = [
+            value for value in safety_context
+            if normalize_text_key(value) not in {"pregnancy", "thai ky", "mang thai"}
+        ]
+        metadata["safety_context"] = [
+            value for value in metadata.get("safety_context", [])
+            if normalize_text_key(str(value)) not in {"pregnancy", "thai ky", "mang thai"}
+        ]
 
     acne_metadata = _detect_acne_type_metadata(normalized_text)
     if acne_metadata:
@@ -97,6 +106,8 @@ def _infer_intent(normalized_text: str, metadata: dict[str, Any]) -> str:
         return "acne_type"
     if _contains_any(normalized_text, ["mun viem", "mụn viêm", "mụn bọc", "mụn nang"]):
         return "acne_type"
+    if _is_class_group_question(normalized_text):
+        return "class_check"
     if _contains_any(normalized_text, ["thuoc nhom", "thuộc nhóm", "nhom gi", "nhóm gì"]):
         return "class_check"
     if _contains_any(normalized_text, ["co phai khang sinh", "có phải kháng sinh", "antibiotic"]):
@@ -104,18 +115,85 @@ def _infer_intent(normalized_text: str, metadata: dict[str, Any]) -> str:
     if _contains_any(normalized_text, ["co phai retinoid", "có phải retinoid", "retinoid"]):
         if "co phai" in normalized_text or "có phải" in normalized_text:
             return "class_check"
+    if _is_comparison_question(normalized_text) and _has_drug_metadata(metadata):
+        return "comparison"
     if _contains_any(
         normalized_text,
         ["tac dung phu", "tác dụng phụ", "kich ung", "kích ứng", "kho da", "khô da", "do da", "đỏ da"],
     ):
         return "side_effect"
-    if _contains_any(normalized_text, ["mang thai", "thai ky", "thai kỳ", "cho con bu", "cho con bú"]):
+    if _contains_any(normalized_text, ["mang thai", "thai ky", "thai kỳ", "cho con bu", "cho con bú"]) and not _has_negated_pregnancy_context(normalized_text):
         return "safety"
-    if _contains_any(normalized_text, ["thanh phan", "thành phần", "co bpo", "có bpo"]):
+    if _contains_any(
+        normalized_text,
+        [
+            "thanh phan",
+            "thành phần",
+            "hoat chat",
+            "hoạt chất",
+            "gom nhung hoat chat",
+            "gồm những hoạt chất",
+            "co bpo",
+            "có bpo",
+        ],
+    ):
         return "ingredient_question"
     if _contains_any(normalized_text, ["la gi", "là gì", "thuoc gi", "thuốc gì"]):
         return "drug_identity" if metadata.get("drug_product") or metadata.get("active_ingredient") else "general_acne_question"
     return "general_acne_question"
+
+
+def _has_drug_metadata(metadata: dict[str, Any]) -> bool:
+    return any(
+        metadata.get(field)
+        for field in ("drug_product", "active_ingredient", "drug_class")
+    )
+
+
+def _is_comparison_question(normalized_text: str) -> bool:
+    return _contains_any(
+        normalized_text,
+        [
+            "so sanh",
+            "so sánh",
+            "khac nhau",
+            "khác nhau",
+            "khac gi",
+            "khác gì",
+            "khac the nao",
+            "khác thế nào",
+            "khac nhau o",
+            "khác nhau ở",
+            " vs ",
+            "versus",
+        ],
+    )
+
+
+def _is_class_group_question(normalized_text: str) -> bool:
+    return _contains_any(
+        normalized_text,
+        [
+            "cung nhom",
+            "cùng nhóm",
+            "cung mot nhom",
+            "cùng một nhóm",
+            "co cung nhom",
+            "có cùng nhóm",
+            "thuoc cung nhom",
+            "thuộc cùng nhóm",
+        ],
+    )
+
+
+def _has_negated_pregnancy_context(normalized_text: str) -> bool:
+    ascii_text = _ascii_fold(normalized_text)
+    negation_patterns = [
+        r"\bkhong\s+(?:co\s+)?(?:mang\s+thai|thai|bau)\b",
+        r"\bkhong\s+phai\s+(?:dang\s+)?(?:mang\s+thai|co\s+thai|co\s+bau)\b",
+        r"\bnoi\s+nham\b.{0,60}\bkhong\b.{0,20}\b(?:mang\s+thai|co\s+thai|co\s+bau|bau)\b",
+    ]
+    return any(re.search(pattern, ascii_text) for pattern in negation_patterns)
 
 
 def _detect_acne_type_metadata(normalized_text: str) -> dict[str, Any]:

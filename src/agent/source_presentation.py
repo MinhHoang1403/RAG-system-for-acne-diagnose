@@ -17,6 +17,9 @@ ENTITY_SOURCE_DISPLAY_NAMES = {
 
 FILE_SOURCE_DISPLAY_NAMES = {
     "web_raw_dataset.json": "Bộ dữ liệu kiến thức mụn",
+    "PIIS0190962223033893.pdf": "Tài liệu chuyên môn về điều trị mụn",
+    "acne-vulgaris-management-pdf-66142088866501.pdf": "Hướng dẫn quản lý mụn trứng cá",
+    "qd_4416_cut.pdf": "Tài liệu tiếng Việt về mụn trứng cá",
 }
 
 SOURCE_TYPE_ORDER = {
@@ -87,13 +90,13 @@ def _source_entry(source_id: str, context: dict[str, Any]) -> dict[str, Any]:
 
 
 def _display_name(source_id: str, *, document_title: str | None, source_type: str) -> str:
-    if document_title:
-        return document_title
     if source_id in ENTITY_SOURCE_DISPLAY_NAMES:
         return ENTITY_SOURCE_DISPLAY_NAMES[source_id]
     filename = Path(source_id.replace("\\", "/")).name
     if filename in FILE_SOURCE_DISPLAY_NAMES:
         return FILE_SOURCE_DISPLAY_NAMES[filename]
+    if document_title:
+        return document_title
     if filename:
         stem = Path(filename).stem
         label = re.sub(r"[_-]+", " ", stem).strip()

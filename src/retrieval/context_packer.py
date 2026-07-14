@@ -14,7 +14,7 @@ from src.retrieval.contracts import (
     RetrievedCandidate,
 )
 
-DRUG_INTENTS = {"drug_identity", "ingredient_question", "class_check"}
+DRUG_INTENTS = {"drug_identity", "ingredient_question", "class_check", "comparison"}
 
 
 def pack_context(
@@ -167,6 +167,14 @@ def _ensure_intent_requirements(
     dropped: list[dict[str, Any]],
 ) -> list[ContextItem]:
     if normalized_query.intent in DRUG_INTENTS:
+        selected = _ensure_primary_entity_coverage(
+            normalized_query,
+            selected,
+            ordered,
+            seen,
+            max_items,
+            dropped,
+        )
         selected = _ensure_source(
             selected,
             ordered,
@@ -200,6 +208,90 @@ def _ensure_intent_requirements(
             if item.source == "chunk" or item.payload.get("entity_type") == "condition"
         ]
     return selected[:max_items]
+
+
+def _ensure_primary_entity_coverage(
+    normalized_query: NormalizedQuery,
+    selected: list[ContextItem],
+    ordered: list[RetrievedCandidate],
+    seen: set[str],
+    max_items: int,
+    dropped: list[dict[str, Any]],
+) -> list[ContextItem]:
+    """Keep entity-card evidence for every primary entity named in a drug query."""
+
+    targets = _primary_entity_targets(normalized_query)
+    if not targets:
+        return selected
+
+    for target in targets:
+        if _selected_has_entity_target(selected, target):
+            continue
+        for candidate in ordered:
+            if candidate.source != "entity" or not _candidate_matches_entity_target(candidate, target):
+                continue
+            key = _dedupe_key(candidate)
+            if key in seen:
+                continue
+            item = _candidate_to_item(candidate, normalized_query)
+            if not item.text.strip():
+                dropped.append(_drop_record(candidate, "empty_text"))
+                continue
+            if len(selected) >= max_items:
+                replace_index = _replacement_index_for_primary_entity(selected)
+                replaced = selected[replace_index]
+                dropped.append(
+                    {
+                        "candidate_id": replaced.item_id,
+                        "source": replaced.source,
+                        "reason": f"replaced_to_include_primary_entity:{target}",
+                    }
+                )
+                selected = [*selected[:replace_index], *selected[replace_index + 1:]]
+            selected.append(item)
+            seen.add(key)
+            break
+    return selected
+
+
+def _primary_entity_targets(normalized_query: NormalizedQuery) -> list[str]:
+    values = [*normalized_query.drug_product, *normalized_query.active_ingredient]
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        key = _key(value)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        output.append(key)
+    return output
+
+
+def _selected_has_entity_target(selected: list[ContextItem], target: str) -> bool:
+    return any(
+        item.source == "entity" and _payload_matches_entity_target(item.payload, target)
+        for item in selected
+    )
+
+
+def _candidate_matches_entity_target(candidate: RetrievedCandidate, target: str) -> bool:
+    return _payload_matches_entity_target(candidate.payload, target)
+
+
+def _payload_matches_entity_target(payload: dict[str, Any], target: str) -> bool:
+    values = [
+        payload.get("canonical_name"),
+        payload.get("entity_id"),
+        *_as_list(payload.get("aliases")),
+    ]
+    return any(_key(value) == target or _key(value).split(":")[-1] == target for value in values)
+
+
+def _replacement_index_for_primary_entity(selected: list[ContextItem]) -> int:
+    for index in range(len(selected) - 1, -1, -1):
+        if selected[index].source != "entity":
+            return index
+    return len(selected) - 1
 
 
 def _ensure_source(
@@ -414,6 +506,10 @@ def _as_list(value: Any) -> list[str]:
 
 def _safe_text(text: str) -> str:
     return " ".join(str(text or "").split())
+
+
+def _key(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "_")
 
 
 def _shorten(text: str, max_len: int) -> str:

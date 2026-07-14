@@ -5,6 +5,7 @@ drug_products:
     canonical_name: Differin
     aliases:
       - differin
+      - diferin
     active_ingredients:
       - adapalene
     drug_class:
@@ -38,6 +39,7 @@ active_ingredients:
     canonical_name: adapalene
     aliases:
       - adapalene
+      - adapalen
     drug_class:
       - topical_retinoid
 
@@ -45,6 +47,7 @@ active_ingredients:
     canonical_name: benzoyl_peroxide
     aliases:
       - benzoyl peroxide
+      - benzoyl peroxid
       - benzoyl_peroxide
       - bpo
       - bp

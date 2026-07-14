@@ -292,6 +292,17 @@ def _deterministic_profile_answer(
             "Không tự xử trí bằng thuốc trị mụn trong lúc có dấu hiệu toàn thân hoặc dấu hiệu cấp cứu."
         )
 
+    if _is_retinoid_shared_class_question(text):
+        return (
+            "Có. Các hoạt chất này đều thuộc nhóm retinoid, nhưng khác đường dùng và bối cảnh chỉ định.\n\n"
+            "| Hoạt chất | Nhóm chung | Điểm cần phân biệt |\n"
+            "|---|---|---|\n"
+            "| Adapalene | Retinoid | Thường là retinoid bôi, hay dùng cho mụn trứng cá và giảm bít tắc nang lông. |\n"
+            "| Tretinoin | Retinoid | Cũng là retinoid bôi trong nhiều phác đồ, nhưng không đồng nghĩa hoàn toàn với adapalene. |\n"
+            "| Isotretinoin | Retinoid | Thường là retinoid đường uống cho mụn nặng/có nguy cơ sẹo và cần bác sĩ da liễu theo dõi. |\n\n"
+            "Vì vậy, không nên kết luận chúng “hoàn toàn khác nhóm”; điểm khác quan trọng là dạng dùng, mức độ cần theo dõi và chỉ định lâm sàng."
+        )
+
     if "mang thai" in text or "co thai" in text or "co bau" in text:
         if "adapalene" in text or "adapalen" in text or "retinoid" in text:
             return (
@@ -317,7 +328,7 @@ def _deterministic_profile_answer(
             "- Tạm ngưng phối hợp nhiều hoạt chất dễ kích ứng nếu da đang đỏ rát."
         )
 
-    if "mun viem nhe" in text and any(marker in text for marker in ["cham soc", "hang ngay", "hằng ngày"]):
+    if _is_mild_inflammatory_routine_question(text):
         return (
             "Mụn viêm nhẹ thường nên bắt đầu bằng routine đơn giản, dịu nhẹ và theo dõi đáp ứng của da thay vì phối hợp nhiều hoạt chất cùng lúc.\n\n"
             "## Chăm sóc hằng ngày\n"
@@ -327,6 +338,16 @@ def _deterministic_profile_answer(
             "## Khi cân nhắc hoạt chất\n"
             "- Benzoyl peroxide hoặc salicylic acid không bị cấm mặc định, nhưng có thể gây khô rát/kích ứng.\n"
             "- Nếu dùng, nên bắt đầu thận trọng, từng sản phẩm một và ngưng dùng và hỏi bác sĩ nếu kích ứng rõ."
+        )
+
+    if "differin" in text and "epiduo" in text and _is_comparison_question(text):
+        return (
+            "Hai sản phẩm khác nhau chủ yếu ở thành phần: Differin chứa adapalene, còn Epiduo chứa adapalene kết hợp benzoyl peroxide.\n\n"
+            "| Thuốc | Thành phần chính | Ý nghĩa |\n"
+            "|---|---|---|\n"
+            "| Differin | Adapalene | Adapalene là retinoid bôi, giúp điều hòa sừng hóa nang lông, giảm bít tắc/nhân mụn và hỗ trợ chống viêm. |\n"
+            "| Epiduo | Adapalene + benzoyl peroxide | Có cùng adapalene như Differin, thêm benzoyl peroxide để hỗ trợ tác dụng kháng khuẩn/antimicrobial với C. acnes và tiêu sừng nhẹ. |\n\n"
+            "Benzoyl peroxide không phải kháng sinh; khi phối hợp trong sản phẩm như Epiduo, nó bổ sung cơ chế tác động khác với adapalene."
         )
 
     if "epiduo" in text and any(marker in text for marker in ["gom", "hoat chat", "thanh phan", "moi hoat chat"]):
@@ -564,7 +585,51 @@ def _is_table_row(line: str) -> bool:
 
 
 def _is_comparison_question(text: str) -> bool:
-    return any(marker in text for marker in ["khác nhau", "khac nhau", "khác gì", "khac gi", "so sánh", "so sanh", " vs ", "versus"])
+    folded = _fold(text)
+    markers = [
+        "khác nhau",
+        "khac nhau",
+        "khác gì",
+        "khac gi",
+        "khác thế nào",
+        "khac the nao",
+        "khác nhau ở",
+        "khac nhau o",
+        "so sánh",
+        "so sanh",
+        " vs ",
+        "versus",
+    ]
+    if any(marker in text or marker in folded for marker in markers):
+        return True
+    return bool(re.search(r"\bkhac\b.{1,80}\bthe nao\b", folded))
+
+
+def _is_mild_inflammatory_routine_question(text: str) -> bool:
+    folded = _fold(text)
+    has_inflammatory_acne = "mun viem" in folded or "mụn viêm" in text
+    has_mild_marker = any(marker in folded for marker in ["nhe", "muc do nhe", "nhẹ"])
+    asks_routine = any(marker in folded for marker in ["cham soc", "hang ngay", "hằng ngày", "routine"])
+    return has_inflammatory_acne and has_mild_marker and asks_routine
+
+
+def _is_retinoid_shared_class_question(text: str) -> bool:
+    folded = _fold(text)
+    retinoids = ["adapalene", "adapalen", "tretinoin", "isotretinoin"]
+    mentioned_count = sum(1 for value in retinoids if value in folded)
+    asks_group = any(
+        marker in folded
+        for marker in [
+            "cung nhom",
+            "cùng nhóm",
+            "nhom thuoc",
+            "nhóm thuốc",
+            "thuoc nhom",
+            "thuộc nhóm",
+            "retinoid",
+        ]
+    )
+    return mentioned_count >= 2 and asks_group and "isotretinoin" in folded
 
 
 def _is_direct_question(text: str) -> bool:
