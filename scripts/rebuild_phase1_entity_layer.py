@@ -34,7 +34,7 @@ except ImportError:
     pass
 
 from src.database.vector_store import qdrant_client_kwargs  # noqa: E402
-from src.integrations.google_genai import embed_texts_sync  # noqa: E402
+from src.integrations.google_genai import build_google_genai_client, embed_texts_sync  # noqa: E402
 from src.knowledge.entity_cards import build_entity_cards_from_taxonomy, entity_card_to_text  # noqa: E402
 from src.knowledge.entity_index import (  # noqa: E402
     build_entity_point,
@@ -639,13 +639,24 @@ def embed_cards(cards: list[EntityCard]) -> list[list[float]]:
     if not api_key:
         raise RuntimeError("GOOGLE_API_KEY is required for --apply.")
     metadata = get_embedding_metadata()
-    return embed_texts_sync(
-        [entity_card_to_text(card) for card in cards],
-        model_name=metadata["embedding_model"],
-        task_type="retrieval_document",
-        expected_dimensions=int(metadata["embedding_dimensions"]),
-        api_key=api_key,
-    )
+    client = build_google_genai_client(api_key=api_key)
+    vectors: list[list[float]] = []
+    for card in cards:
+        # The Google GenAI embedding endpoint can return a single embedding
+        # for multi-content requests in this SDK/runtime combination. Send
+        # one entity card at a time so the controlled rebuild never silently
+        # mismatches entity cards and vectors.
+        vectors.extend(
+            embed_texts_sync(
+                [entity_card_to_text(card)],
+                model_name=metadata["embedding_model"],
+                task_type="retrieval_document",
+                expected_dimensions=int(metadata["embedding_dimensions"]),
+                api_key=api_key,
+                client=client,
+            )
+        )
+    return vectors
 
 
 def duplicate_entities(points: list[dict[str, Any]]) -> dict[str, list[str]]:

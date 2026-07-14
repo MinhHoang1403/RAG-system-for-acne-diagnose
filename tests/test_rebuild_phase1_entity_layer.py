@@ -119,3 +119,23 @@ def test_duplicate_detection_helpers() -> None:
     )
 
     assert duplicates == {"drug_product:tazorac": ["1", "2"]}
+
+
+def test_embed_cards_uses_single_item_embedding_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    cards = build_entity_cards_from_taxonomy()[:2]
+    calls: list[list[str]] = []
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setattr(rebuild, "build_google_genai_client", lambda api_key: object())
+
+    def fake_embed_texts_sync(texts: list[str], **_: object) -> list[list[float]]:
+        calls.append(texts)
+        return [[0.0] * 3072]
+
+    monkeypatch.setattr(rebuild, "embed_texts_sync", fake_embed_texts_sync)
+
+    vectors = rebuild.embed_cards(cards)
+
+    assert len(vectors) == len(cards)
+    assert calls
+    assert all(len(batch) == 1 for batch in calls)
