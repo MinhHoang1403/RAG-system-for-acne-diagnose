@@ -131,6 +131,16 @@ async def validate_entity_graph(driver: Any) -> dict[str, Any]:
             "-[:HAS_ACTIVE_INGREDIENT]->"
             "(:ActiveIngredient {canonical_name:'adapalene'}) RETURN count(*) AS count"
         ),
+        "tazorac_has_tazarotene": (
+            "MATCH (:DrugProduct {canonical_name:'Tazorac'})"
+            "-[:HAS_ACTIVE_INGREDIENT]->"
+            "(:ActiveIngredient {canonical_name:'tazarotene'}) RETURN count(*) AS count"
+        ),
+        "tazarotene_topical_retinoid": (
+            "MATCH (:ActiveIngredient {canonical_name:'tazarotene'})"
+            "-[:BELONGS_TO_CLASS]->"
+            "(:DrugClass {canonical_name:'topical_retinoid'}) RETURN count(*) AS count"
+        ),
         "bpo_not_topical_or_oral_antibiotic": (
             "MATCH (:ActiveIngredient {canonical_name:'benzoyl_peroxide'})"
             "-[:BELONGS_TO_CLASS]->"

@@ -19,7 +19,7 @@ def test_build_entity_cards_contains_required_products() -> None:
         if card.entity_type == "drug_product"
     }
 
-    assert {"Differin", "Epiduo", "Dalacin T"}.issubset(product_names)
+    assert {"Differin", "Epiduo", "Dalacin T", "Tazorac"}.issubset(product_names)
 
 
 def test_dalacin_card_payload() -> None:
@@ -42,6 +42,16 @@ def test_differin_card_payload() -> None:
 
     assert "adapalene" in card.active_ingredients
     assert "topical_retinoid" in card.drug_class
+
+
+def test_tazorac_card_payload() -> None:
+    product = _find_card("drug_product", "Tazorac")
+    ingredient = _find_card("active_ingredient", "tazarotene")
+
+    assert "tazarotene" in product.active_ingredients
+    assert "topical_retinoid" in product.drug_class
+    assert "tazaroten" in ingredient.aliases
+    assert "topical_retinoid" in ingredient.drug_class
 
 
 def test_benzoyl_peroxide_entity_not_antibiotic() -> None:
@@ -93,4 +103,4 @@ def test_dry_run_summary_does_not_require_qdrant() -> None:
     assert summary["collection"] == "acne_entities_v1"
     assert summary["card_count"] >= 3
     preview_names = {payload["canonical_name"] for payload in summary["preview_payloads"]}
-    assert {"Dalacin T", "Epiduo", "Differin", "benzoyl_peroxide"}.issubset(preview_names)
+    assert {"Dalacin T", "Epiduo", "Differin", "Tazorac", "benzoyl_peroxide", "tazarotene"}.issubset(preview_names)

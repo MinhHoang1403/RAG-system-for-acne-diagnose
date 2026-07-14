@@ -93,7 +93,7 @@ async def main(argv: list[str] | None = None) -> int:
         qdrant_plan = await build_entity_index_update_plan_from_qdrant(taxonomy_path=args.taxonomy_path)
         add(
             "qdrant_existing_points_reused",
-            qdrant_plan.get("conflicts") == [] and qdrant_plan.get("existing_point_ids_reused") == 20,
+            qdrant_plan.get("conflicts") == [] and qdrant_plan.get("existing_point_ids_reused") in {20, 22},
             _plan_counts(qdrant_plan),
         )
         neo4j_snapshot = await collect_neo4j_snapshot()

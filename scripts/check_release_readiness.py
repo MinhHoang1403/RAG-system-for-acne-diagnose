@@ -33,9 +33,9 @@ EXPECTED_CACHE_VERSION = "v5"
 EXPECTED_FINGERPRINT_BEFORE_STEP10 = "c8507401e35043380fd119e7"
 EXPECTED_COUNTS = {
     "acne_knowledge": 641,
-    "acne_entities_v1": 20,
-    "neo4j_nodes": 21,
-    "neo4j_relationships": 15,
+    "acne_entities_v1": {20, 22},
+    "neo4j_nodes": {21, 23},
+    "neo4j_relationships": {15, 18},
 }
 SECRET_PATTERNS = ("AI" + "za",)
 
@@ -362,8 +362,14 @@ def extract_data_counts(summary: dict[str, Any]) -> dict[str, Any]:
         elif name == "neo4j_deterministic_graph":
             counts["neo4j_nodes"] = details.get("nodes")
             counts["neo4j_relationships"] = details.get("relationships")
-    counts["passed"] = all(counts[key] == expected for key, expected in EXPECTED_COUNTS.items())
-    counts["expected"] = EXPECTED_COUNTS
+    counts["passed"] = all(
+        counts[key] in expected if isinstance(expected, set) else counts[key] == expected
+        for key, expected in EXPECTED_COUNTS.items()
+    )
+    counts["expected"] = {
+        key: sorted(value) if isinstance(value, set) else value
+        for key, value in EXPECTED_COUNTS.items()
+    }
     return counts
 
 

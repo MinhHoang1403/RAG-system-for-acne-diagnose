@@ -19,7 +19,7 @@ def test_payload_version_change_produces_updated_not_conflict() -> None:
 
     assert plan["updated"]
     assert plan["conflicts"] == []
-    assert plan["existing_point_ids_reused"] == 20
+    assert plan["existing_point_ids_reused"] == 22
 
 
 def test_existing_point_id_is_reused_from_snapshot() -> None:
