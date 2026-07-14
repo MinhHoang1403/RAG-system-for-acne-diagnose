@@ -5,6 +5,7 @@ export default function Sidebar({
   activeSessionId,
   sidebarOpen,
   backendOnline = true,
+  connectionStatus = null,
   onNewChat,
   onSelectSession,
   onRenameSession,
@@ -24,6 +25,14 @@ export default function Sidebar({
     .filter((s) => !s.hidden && (!historyHiddenAt || s.createdAt > historyHiddenAt))
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const hasVisibleStoredSessions = sessions.some((s) => !s.hidden);
+  const connectionState = connectionStatus?.state || (backendOnline ? 'connected' : 'disconnected');
+  const showConnectionBanner = connectionState !== 'connected';
+  const connectionBannerClass = `sidebar-offline-banner sidebar-offline-banner-${connectionState}`;
+  const connectionMessage =
+    connectionStatus?.message ||
+    (backendOnline
+      ? 'Backend đã kết nối.'
+      : 'Đang dùng lịch sử cục bộ vì chưa kết nối backend.');
 
   useEffect(() => {
     if (!historyMenuOpen) return;
@@ -218,8 +227,8 @@ export default function Sidebar({
       </div>
 
       {/* Offline banner */}
-      {!backendOnline && (
-        <div className="sidebar-offline-banner">
+      {showConnectionBanner && (
+        <div className={connectionBannerClass}>
           <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path
               strokeLinecap="round"
@@ -228,8 +237,8 @@ export default function Sidebar({
               d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
             />
           </svg>
-          <span>Đang dùng lịch sử cục bộ vì chưa kết nối backend.</span>
-          {onClearLocalHistory && (
+          <span>{connectionMessage}</span>
+          {connectionState === 'disconnected' && onClearLocalHistory && (
             <button
               type="button"
               className="sidebar-offline-clear"

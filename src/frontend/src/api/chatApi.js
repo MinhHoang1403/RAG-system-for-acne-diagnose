@@ -1,4 +1,6 @@
-export const API_BASE_URL = (import.meta.env && import.meta.env.VITE_API_URL) || 'http://127.0.0.1:8000';
+import { API_BASE_URL, buildApiUrl } from '../config/api.js';
+
+export { API_BASE_URL };
 
 const STATUS_MESSAGES = {
   429: 'Hệ thống đang nhận quá nhiều yêu cầu. Vui lòng thử lại sau.',
@@ -59,7 +61,7 @@ export async function sendChatMessage({
 }) {
   let response;
   try {
-    response = await fetch(`${API_BASE_URL}/chat`, {
+    response = await fetch(buildApiUrl('/chat'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -74,9 +76,10 @@ export async function sendChatMessage({
       }),
     });
   } catch (err) {
-    const error = new Error('Không thể kết nối tới backend. Hãy kiểm tra FastAPI tại http://127.0.0.1:8000.');
+    const error = new Error(`Không thể kết nối tới backend. Hãy kiểm tra FastAPI tại ${API_BASE_URL}.`);
     error.cause = err;
     error.status = null;
+    error.isNetworkError = true;
     throw error;
   }
 
@@ -88,18 +91,58 @@ export async function sendChatMessage({
 }
 
 /**
- * Check if the backend is reachable.
- * @returns {Promise<boolean>}
+ * Check if the backend is reachable and classify dependency state.
+ * @returns {Promise<{state: string, reachable: boolean, health: Object|null, reason: string|null}>}
  */
-export async function checkBackendHealth() {
+export async function checkBackendHealth({ timeoutMs = 4000, signal } = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  if (signal) {
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+  }
+
   try {
-    const response = await fetch(`${API_BASE_URL}/health`, {
+    const response = await fetch(buildApiUrl('/health'), {
       method: 'GET',
-      signal: AbortSignal.timeout(3000),
+      signal: controller.signal,
     });
-    return response.ok;
-  } catch {
-    return false;
+    const health = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      return {
+        state: 'degraded',
+        reachable: true,
+        health,
+        reason: `health_http_${response.status}`,
+      };
+    }
+
+    if (health?.status === 'ok') {
+      return { state: 'connected', reachable: true, health, reason: null };
+    }
+
+    return {
+      state: 'degraded',
+      reachable: true,
+      health,
+      reason: health?.status || 'health_degraded',
+    };
+  } catch (err) {
+    const timedOut = err?.name === 'AbortError';
+    return {
+      state: 'disconnected',
+      reachable: false,
+      health: null,
+      reason: timedOut ? 'health_timeout' : 'network_error',
+      error: err,
+    };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -108,7 +151,7 @@ export async function checkBackendHealth() {
  * @returns {Promise<Object>}
  */
 export async function fetchModels() {
-  const response = await fetch(`${API_BASE_URL}/models`);
+  const response = await fetch(buildApiUrl('/models'));
   if (!response.ok) throw await parseApiError(response);
   return response.json();
 }
@@ -124,7 +167,7 @@ export async function fetchSessions(userId = null, includeHidden = false) {
   if (userId) params.set('user_id', userId);
   if (includeHidden) params.set('include_hidden', 'true');
 
-  const response = await fetch(`${API_BASE_URL}/chat/sessions?${params.toString()}`);
+  const response = await fetch(buildApiUrl(`/chat/sessions?${params.toString()}`));
   if (!response.ok) throw await parseApiError(response);
   const data = await response.json();
   return normalizeListResponse(data);
@@ -136,7 +179,7 @@ export async function fetchSessions(userId = null, includeHidden = false) {
  * @returns {Promise<Array>}
  */
 export async function fetchMessages(sessionId) {
-  const response = await fetch(`${API_BASE_URL}/chat/sessions/${sessionId}/messages`);
+  const response = await fetch(buildApiUrl(`/chat/sessions/${sessionId}/messages`));
   if (!response.ok) throw await parseApiError(response);
   const data = await response.json();
   return normalizeListResponse(data);
@@ -149,7 +192,7 @@ export async function fetchMessages(sessionId) {
  * @returns {Promise<Object>}
  */
 export async function renameSession(sessionId, title) {
-  const response = await fetch(`${API_BASE_URL}/chat/sessions/${sessionId}/rename`, {
+  const response = await fetch(buildApiUrl(`/chat/sessions/${sessionId}/rename`), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title }),
@@ -164,7 +207,7 @@ export async function renameSession(sessionId, title) {
  * @returns {Promise<Object>}
  */
 export async function hideSession(sessionId) {
-  const response = await fetch(`${API_BASE_URL}/chat/sessions/${sessionId}/hide`, {
+  const response = await fetch(buildApiUrl(`/chat/sessions/${sessionId}/hide`), {
     method: 'PATCH',
   });
   if (!response.ok) throw await parseApiError(response);
@@ -176,7 +219,7 @@ export async function hideSession(sessionId) {
  * @returns {Promise<Object>} deletion counts
  */
 export async function deleteAllChatSessions() {
-  const response = await fetch(`${API_BASE_URL}/chat/sessions`, {
+  const response = await fetch(buildApiUrl('/chat/sessions'), {
     method: 'DELETE',
   });
   if (!response.ok) throw await parseApiError(response);
@@ -213,7 +256,7 @@ export async function syncSessionsToBackend(sessions) {
     })),
   }));
 
-  const response = await fetch(`${API_BASE_URL}/chat/sessions/sync`, {
+  const response = await fetch(buildApiUrl('/chat/sessions/sync'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessions: payload }),

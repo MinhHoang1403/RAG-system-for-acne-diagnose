@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-import { fetchModels, parseApiError, sendChatMessage } from './chatApi.js';
+import { checkBackendHealth, fetchModels, parseApiError, sendChatMessage } from './chatApi.js';
 
 function jsonResponse(status, body) {
   return new Response(JSON.stringify(body), {
@@ -45,6 +45,49 @@ test('sendChatMessage distinguishes network failure from HTTP errors', async (t)
       return true;
     },
   );
+});
+
+test('checkBackendHealth returns degraded for reachable degraded backend', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), /\/health$/);
+    return jsonResponse(200, {
+      status: 'degraded',
+      checks: { qdrant: { status: 'unavailable' } },
+    });
+  };
+
+  const health = await checkBackendHealth({ timeoutMs: 50 });
+
+  assert.equal(health.reachable, true);
+  assert.equal(health.state, 'degraded');
+  assert.equal(health.health.status, 'degraded');
+});
+
+test('checkBackendHealth returns disconnected for timeout or network failure', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  globalThis.fetch = async (_url, init) =>
+    new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      });
+    });
+
+  const health = await checkBackendHealth({ timeoutMs: 1 });
+
+  assert.equal(health.reachable, false);
+  assert.equal(health.state, 'disconnected');
+  assert.equal(health.reason, 'health_timeout');
 });
 
 test('sendChatMessage sends selected provider and model id', async (t) => {
@@ -104,6 +147,36 @@ test('fetchModels accepts Gemini 3.1 Flash-Lite catalog entries', async (t) => {
   const flashLite = catalog.models.find((model) => model.model_id === 'gemini-3.1-flash-lite');
   assert.equal(flashLite.display_name, 'Gemini 3.1 Flash-Lite');
   assert.equal(flashLite.provider, 'gemini');
+});
+
+test('health, models, and chat use the same canonical API base', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const urls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    urls.push(String(url));
+    if (String(url).endsWith('/chat')) {
+      assert.equal(init.method, 'POST');
+      return jsonResponse(200, { answer: 'ok' });
+    }
+    if (String(url).endsWith('/health')) {
+      return jsonResponse(200, { status: 'ok' });
+    }
+    return jsonResponse(200, { models: [] });
+  };
+
+  await checkBackendHealth({ timeoutMs: 50 });
+  await fetchModels();
+  await sendChatMessage({ message: 'mụn', sessionId: null });
+
+  assert.deepEqual(urls, [
+    'http://127.0.0.1:8000/health',
+    'http://127.0.0.1:8000/models',
+    'http://127.0.0.1:8000/chat',
+  ]);
 });
 
 test('frontend model selector and badge support Flash-Lite fallback metadata', () => {

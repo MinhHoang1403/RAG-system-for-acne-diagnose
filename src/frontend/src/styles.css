@@ -335,6 +335,34 @@ body {
   line-height: 1.4;
 }
 
+.sidebar-offline-banner-checking,
+.sidebar-offline-banner-recovering {
+  color: #1e40af;
+  background-color: #eff6ff;
+  border-top-color: #bfdbfe;
+}
+
+.sidebar-offline-banner-checking svg,
+.sidebar-offline-banner-recovering svg {
+  color: #2563eb;
+}
+
+.sidebar-offline-banner-degraded {
+  color: #854d0e;
+  background-color: #fefce8;
+  border-top-color: #fde047;
+}
+
+.sidebar-offline-banner-degraded svg {
+  color: #ca8a04;
+}
+
+.sidebar-offline-banner-disconnected {
+  color: #92400e;
+  background-color: #fffbeb;
+  border-top-color: #fde68a;
+}
+
 .sidebar-offline-clear {
   border: 1px solid #f59e0b;
   border-radius: 6px;
