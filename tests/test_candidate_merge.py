@@ -54,3 +54,32 @@ def test_merge_dedupes_by_collection_and_payload_ids():
 
     assert len(merged) == 1
     assert merged[0].candidate_id == "second"
+
+
+def test_merge_preserves_chunk_evidence_for_drug_intent_when_entities_fill_limit():
+    normalized = normalize_query("Tazorac, Differin và Epiduo khác nhau về hoạt chất như thế nào?")
+    entities = [
+        RetrievedCandidate(
+            candidate_id=f"entity:{index}",
+            source="entity",
+            collection="acne_entities_v1",
+            text=f"Entity {index}",
+            score=1.0 - index * 0.01,
+            payload={"entity_id": f"entity:{index}", "canonical_name": f"Entity {index}"},
+        )
+        for index in range(8)
+    ]
+    chunk = RetrievedCandidate(
+        candidate_id="chunk:tazorac",
+        source="chunk",
+        collection="acne_knowledge",
+        text="Tazorac tazarotene Differin adapalene Epiduo benzoyl peroxide",
+        score=0.01,
+        payload={"chunk_id": "chunk:tazorac"},
+        matched_metadata={"drug_product": ["Tazorac"]},
+    )
+
+    merged = merge_candidates(entities, [chunk], normalized, limit=5)
+
+    assert len(merged) == 5
+    assert any(candidate.source == "chunk" for candidate in merged)

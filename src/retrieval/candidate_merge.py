@@ -9,6 +9,7 @@ from src.retrieval.contracts import NormalizedQuery, RetrievedCandidate
 
 
 ENTITY_PRIORITY_INTENTS = {"drug_identity", "ingredient_question", "class_check"}
+DRUG_EVIDENCE_INTENTS = {"drug_identity", "ingredient_question", "class_check", "comparison"}
 
 
 def merge_candidates(
@@ -28,15 +29,39 @@ def merge_candidates(
         if existing is None or (scored.fused_score or 0.0) > (existing.fused_score or 0.0):
             deduped[key] = scored
 
-    ranked = sorted(
+    all_ranked = sorted(
         deduped.values(),
         key=lambda candidate: candidate.fused_score or candidate.score or 0.0,
         reverse=True,
-    )[:limit]
+    )
+    ranked = _preserve_chunk_evidence(all_ranked, normalized_query, limit)
     return [
         candidate.model_copy(update={"rank": index + 1})
         for index, candidate in enumerate(ranked)
     ]
+
+
+def _preserve_chunk_evidence(
+    ranked: list[RetrievedCandidate],
+    normalized_query: NormalizedQuery,
+    limit: int,
+) -> list[RetrievedCandidate]:
+    """Keep at least one chunk evidence candidate for drug-like queries."""
+
+    selected = ranked[:limit]
+    if (
+        normalized_query.intent not in DRUG_EVIDENCE_INTENTS
+        or any(candidate.source == "chunk" for candidate in selected)
+    ):
+        return selected
+    first_chunk = next((candidate for candidate in ranked[limit:] if candidate.source == "chunk"), None)
+    if first_chunk is None:
+        return selected
+    if len(selected) < limit:
+        return [*selected, first_chunk]
+    if not selected:
+        return [first_chunk]
+    return [*selected[:-1], first_chunk]
 
 
 def _with_merge_score(

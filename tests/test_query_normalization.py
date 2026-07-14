@@ -27,6 +27,17 @@ def test_drug_queries_normalize_taxonomy_entities():
     assert epiduo_ingredients.intent == "ingredient_question"
     assert {"adapalene", "benzoyl_peroxide"}.issubset(epiduo_ingredients.active_ingredient)
 
+    tazorac = normalize_query("Tazorac chứa hoạt chất gì?")
+    assert tazorac.intent == "ingredient_question"
+    assert "Tazorac" in tazorac.drug_product
+    assert "tazarotene" in tazorac.active_ingredient
+    assert "topical_retinoid" in tazorac.drug_class
+
+    tazarotene = normalize_query("Tazarotene thuộc nhóm thuốc nào?")
+    assert tazarotene.intent == "class_check"
+    assert "tazarotene" in tazarotene.active_ingredient
+    assert "topical_retinoid" in tazarotene.drug_class
+
 
 def test_class_contrast_queries_do_not_assign_negative_class():
     bp = normalize_query("Benzoyl peroxide có phải kháng sinh không?")
@@ -61,6 +72,15 @@ def test_comparison_and_group_queries_keep_all_primary_entities():
     assert {"Differin", "Epiduo"}.issubset(products.drug_product)
     assert {"adapalene", "benzoyl_peroxide"}.issubset(products.active_ingredient)
 
+    tazorac_products = normalize_query(
+        "Tazorac, Differin và Epiduo khác nhau về hoạt chất như thế nào?"
+    )
+    assert tazorac_products.intent == "comparison"
+    assert {"Tazorac", "Differin", "Epiduo"}.issubset(tazorac_products.drug_product)
+    assert {"tazarotene", "adapalene", "benzoyl_peroxide"}.issubset(
+        tazorac_products.active_ingredient
+    )
+
     ingredients = normalize_query("Adapalene và benzoyl peroxide khác nhau thế nào?")
     assert ingredients.intent == "comparison"
     assert {"adapalene", "benzoyl_peroxide"}.issubset(ingredients.active_ingredient)
@@ -83,6 +103,14 @@ def test_common_typos_and_no_diacritic_mentions_resolve_to_taxonomy_entities():
     bp = normalize_query("benzoyl peroxid co phai khang sinh khong")
     assert bp.intent == "class_check"
     assert "benzoyl_peroxide" in bp.active_ingredient
+
+    tazorac = normalize_query("tazorac co hoat chat gi")
+    assert "Tazorac" in tazorac.drug_product
+    assert "tazarotene" in tazorac.active_ingredient
+
+    tazarotene = normalize_query("tazaroten thuoc nhom nao")
+    assert "tazarotene" in tazarotene.active_ingredient
+    assert "topical_retinoid" in tazarotene.drug_class
 
 
 def test_negated_pregnancy_context_does_not_keep_safety_intent():
