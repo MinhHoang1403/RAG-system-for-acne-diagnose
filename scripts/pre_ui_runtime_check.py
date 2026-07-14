@@ -303,15 +303,19 @@ def _summarize_model_path(value: str) -> str:
 
 def _check_frontend_config() -> dict[str, Any]:
     api_client = PROJECT_ROOT / "src" / "frontend" / "src" / "api" / "chatApi.js"
+    api_config = PROJECT_ROOT / "src" / "frontend" / "src" / "config" / "api.js"
     package_json = PROJECT_ROOT / "src" / "frontend" / "package.json"
     if not api_client.exists():
         return check("frontend_api_config", False, {"error": "src/frontend API client not found"}, severity="warning")
     source = api_client.read_text(encoding="utf-8")
+    config_source = api_config.read_text(encoding="utf-8") if api_config.exists() else ""
+    combined_source = f"{source}\n{config_source}"
     details = {
         "api_client": str(api_client.relative_to(PROJECT_ROOT)),
+        "api_config": str(api_config.relative_to(PROJECT_ROOT)) if api_config.exists() else None,
         "package_json_exists": package_json.exists(),
-        "uses_vite_api_url": "import.meta.env.VITE_API_URL" in source,
-        "fallback_local_api": "http://127.0.0.1:8000" in source or "http://localhost:8000" in source,
+        "uses_vite_api_url": "VITE_API_URL" in combined_source,
+        "fallback_local_api": "http://127.0.0.1:8000" in combined_source or "http://localhost:8000" in combined_source,
         "chat_endpoint": "/chat" in source,
         "health_endpoint": "/health" in source,
     }

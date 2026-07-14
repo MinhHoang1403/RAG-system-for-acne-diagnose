@@ -2,6 +2,14 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Sidebar from './components/Sidebar.jsx';
 import ChatWindow from './components/ChatWindow.jsx';
 import {
+  CONNECTION_STATES,
+  HEALTH_TIMING,
+  classifyHealthResult,
+  isBackendReachable,
+  nextHealthDelayMs,
+  shouldTreatChatErrorAsDisconnected,
+} from './api/connectivity.js';
+import {
   sendChatMessage,
   checkBackendHealth,
   fetchSessions,
@@ -29,17 +37,26 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [backendOnline, setBackendOnline] = useState(true); // assume online initially
+  const [connectionStatus, setConnectionStatus] = useState({
+    state: CONNECTION_STATES.CHECKING,
+    message: 'Đang kiểm tra kết nối backend...',
+    health: null,
+    reason: null,
+  });
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [historyHiddenAt, setHistoryHiddenAt] = useState(() => loadHistoryHiddenAt());
   const requestInFlight = useRef(false);
 
-  // Track whether initial load from backend has been done
-  const initialLoadDone = useRef(false);
+  const backendSessionsLoaded = useRef(false);
+  const healthTimerRef = useRef(null);
+  const healthAbortRef = useRef(null);
+  const healthSequenceRef = useRef(0);
+  const healthAttemptRef = useRef(0);
 
   // ── Derived ────────────────────────────────────────────
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
   const chatHistory = activeSession ? activeSession.messages : [];
+  const backendOnline = isBackendReachable(connectionStatus);
 
   // ── Persistence to localStorage ────────────────────────
   useEffect(() => {
@@ -54,42 +71,114 @@ export default function App() {
     saveHistoryHiddenAt(historyHiddenAt);
   }, [historyHiddenAt]);
 
-  // ── Initial Load: check backend & load sessions ────────
+  // ── Backend health loop: startup order, restart, degraded state ────────
   useEffect(() => {
-    if (initialLoadDone.current) return;
-    initialLoadDone.current = true;
+    let cancelled = false;
+
+    const clearHealthTimer = () => {
+      if (healthTimerRef.current) {
+        clearTimeout(healthTimerRef.current);
+        healthTimerRef.current = null;
+      }
+    };
+
+    const scheduleNextCheck = (state) => {
+      if (cancelled) return;
+      clearHealthTimer();
+      const delay = nextHealthDelayMs(state, healthAttemptRef.current, document.visibilityState);
+      healthTimerRef.current = setTimeout(() => runHealthCheck('scheduled'), delay);
+    };
+
+    const runHealthCheck = async (reason) => {
+      const sequence = ++healthSequenceRef.current;
+      healthAbortRef.current?.abort();
+      const controller = new AbortController();
+      healthAbortRef.current = controller;
+
+      setConnectionStatus((prev) => {
+        if (prev.state === CONNECTION_STATES.CONNECTED || prev.state === CONNECTION_STATES.DEGRADED) {
+          return prev;
+        }
+        return {
+          ...prev,
+          state: reason === 'startup' ? CONNECTION_STATES.CHECKING : CONNECTION_STATES.RECOVERING,
+          message: reason === 'startup' ? 'Đang kiểm tra kết nối backend...' : 'Đang kết nối lại backend...',
+        };
+      });
+
+      const result = await checkBackendHealth({
+        timeoutMs: HEALTH_TIMING.timeoutMs,
+        signal: controller.signal,
+      });
+
+      if (cancelled || sequence !== healthSequenceRef.current) return;
+
+      const nextStatus = classifyHealthResult(result);
+      setConnectionStatus(nextStatus);
+
+      if (isBackendReachable(nextStatus)) {
+        healthAttemptRef.current = 0;
+      } else {
+        healthAttemptRef.current += 1;
+      }
+
+      scheduleNextCheck(nextStatus.state);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        runHealthCheck('visible');
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    runHealthCheck('startup');
+
+    return () => {
+      cancelled = true;
+      clearHealthTimer();
+      healthAbortRef.current?.abort();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  // ── Load persisted sessions once backend is reachable ────────
+  useEffect(() => {
+    if (!backendOnline || backendSessionsLoaded.current) return;
+    backendSessionsLoaded.current = true;
 
     (async () => {
-      const online = await checkBackendHealth();
-      setBackendOnline(online);
+      try {
+        const backendSessions = await fetchSessions();
+        const normalizedBackendSessions = backendSessions.map((s) => ({
+          id: s.id,
+          title: s.title,
+          createdAt: new Date(s.created_at).getTime(),
+          updatedAt: new Date(s.updated_at).getTime(),
+          hidden: s.hidden,
+          messages: [],
+          _fromBackend: true,
+        }));
 
-      if (online) {
-        try {
-          const backendSessions = await fetchSessions();
-          const normalizedBackendSessions = backendSessions.map((s) => ({
-            id: s.id,
-            title: s.title,
-            createdAt: new Date(s.created_at).getTime(),
-            updatedAt: new Date(s.updated_at).getTime(),
-            hidden: s.hidden,
-            messages: [], // Will be loaded on-demand when selected
-            _fromBackend: true,
-          }));
+        setSessions((prev) => {
+          const localOnly = prev.filter((session) => !session._fromBackend);
+          const backendIds = new Set(normalizedBackendSessions.map((session) => session.id));
+          return [
+            ...localOnly.filter((session) => !backendIds.has(session.id)),
+            ...normalizedBackendSessions,
+          ];
+        });
 
-          setBackendOnline(true);
-          setSessions(normalizedBackendSessions);
-
-          const backendIds = new Set(normalizedBackendSessions.map((s) => s.id));
-          if (!activeSessionId || !backendIds.has(activeSessionId)) {
-            setActiveSessionId(normalizedBackendSessions[0]?.id || null);
-          }
-        } catch (err) {
-          console.warn('Failed to load sessions from backend:', err);
-          setBackendOnline(false);
+        const backendIds = new Set(normalizedBackendSessions.map((s) => s.id));
+        if (!activeSessionId || !backendIds.has(activeSessionId)) {
+          setActiveSessionId((current) => current || normalizedBackendSessions[0]?.id || null);
         }
+      } catch (err) {
+        backendSessionsLoaded.current = false;
+        console.warn('Failed to load sessions from backend:', err);
       }
     })();
-  }, [activeSessionId]);
+  }, [activeSessionId, backendOnline]);
 
   // ── Load messages from backend when selecting a session ─
   const _loadMessagesFromBackend = useCallback(async (sessionId) => {
@@ -339,9 +428,21 @@ export default function App() {
       } catch (err) {
         setError(err?.message || 'Backend không thể xử lý yêu cầu. Vui lòng thử lại.');
 
-        if (!err?.status) {
-          const stillOnline = await checkBackendHealth();
-          setBackendOnline(stillOnline);
+        if (shouldTreatChatErrorAsDisconnected(err)) {
+          const health = await checkBackendHealth({ timeoutMs: HEALTH_TIMING.timeoutMs });
+          setConnectionStatus(classifyHealthResult(health));
+        } else {
+          setConnectionStatus((prev) => {
+            if (prev.state === CONNECTION_STATES.DISCONNECTED || prev.state === CONNECTION_STATES.RECOVERING) {
+              return {
+                state: CONNECTION_STATES.CONNECTED,
+                message: 'Backend đã kết nối.',
+                health: prev.health,
+                reason: null,
+              };
+            }
+            return prev;
+          });
         }
         return false;
       } finally {
@@ -367,6 +468,7 @@ export default function App() {
         activeSessionId={activeSessionId}
         sidebarOpen={sidebarOpen}
         backendOnline={backendOnline}
+        connectionStatus={connectionStatus}
         onNewChat={handleNewChat}
         onSelectSession={handleSelectSession}
         onRenameSession={handleRenameSession}
