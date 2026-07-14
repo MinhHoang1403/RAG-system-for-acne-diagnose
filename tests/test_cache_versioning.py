@@ -119,6 +119,25 @@ def test_severity_guard_version_is_in_manifest_and_changes_fingerprint():
     assert compute_pipeline_fingerprint(old_manifest) != compute_pipeline_fingerprint(new_manifest)
 
 
+def test_entity_foundation_version_is_in_manifest_and_changes_fingerprint():
+    old_manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "ENTITY_FOUNDATION_VERSION": "entity_foundation_v1",
+        }
+    )
+    new_manifest = build_pipeline_version_manifest(
+        {
+            "CACHE_ANSWER_VERSION": "v5",
+            "ENTITY_FOUNDATION_VERSION": "entity_foundation_v2",
+        }
+    )
+
+    assert new_manifest["entity_foundation_version"] == "entity_foundation_v2"
+    assert new_manifest["answer_cache_version"] == "v5"
+    assert compute_pipeline_fingerprint(old_manifest) != compute_pipeline_fingerprint(new_manifest)
+
+
 def test_google_genai_sdk_version_is_in_manifest_and_changes_fingerprint():
     old_manifest = build_pipeline_version_manifest(
         {
@@ -172,6 +191,7 @@ def test_manifest_summary_includes_severity_and_runtime_fields():
     summary = pipeline_manifest_summary(manifest)
 
     assert manifest["severity_guard_version"] == "severity_aware_answer_guard_v1"
+    assert manifest["entity_foundation_version"] == "entity_foundation_v2"
     assert manifest["qdrant_collection_name"] == "acne_chunks_v2"
     assert manifest["entity_collection_name"] == "acne_entities_v2"
     assert manifest["embedding_dimensions"] == 3072
@@ -183,6 +203,7 @@ def test_manifest_summary_includes_severity_and_runtime_fields():
     assert manifest["rule_rerank_weight"] == 0.25
     assert manifest["retrieval_rerank_weight"] == 0.10
     assert summary["severity_guard_version"] == manifest["severity_guard_version"]
+    assert summary["entity_foundation_version"] == manifest["entity_foundation_version"]
 
 
 def test_manifest_promotes_legacy_chunk_collection_to_base_collection():

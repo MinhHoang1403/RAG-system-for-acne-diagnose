@@ -13,7 +13,8 @@ def test_taxonomy_v2_loads_with_schema_metadata() -> None:
     assert catalog.taxonomy_version == "drug_taxonomy_v2"
     assert catalog.entity_schema_version == "entity_schema_v2"
     assert catalog.taxonomy_schema_version == "taxonomy_schema_v2"
-    assert catalog.entity_counts()["drug_product"] == 3
+    assert catalog.entity_counts()["drug_product"] == 4
+    assert catalog.entity_counts()["active_ingredient"] == 8
 
 
 def test_taxonomy_json_schema_exports() -> None:

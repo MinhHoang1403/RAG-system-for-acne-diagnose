@@ -11,7 +11,7 @@ def test_valid_taxonomy_passes() -> None:
     report = validate_taxonomy_catalog(load_taxonomy_catalog())
 
     assert report.passed is True
-    assert report.verified_count == 21
+    assert report.verified_count == 23
     assert report.draft_count == 0
 
 
