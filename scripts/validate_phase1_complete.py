@@ -33,7 +33,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 DEFAULT_MANIFEST_PATH = PROJECT_ROOT / "data" / "ingestion_manifest.json"
 EXPECTED_CHUNK_COLLECTION = os.getenv("QDRANT_COLLECTION_NAME", "acne_knowledge").strip() or "acne_knowledge"
 EXPECTED_ENTITY_COLLECTION = get_entity_collection_name()
-EXPECTED_ENTITY_POINTS = 20
+ACCEPTABLE_ENTITY_POINTS = {20, 22}
 EXPECTED_MANIFEST_RECORDS = 4
 EXPECTED_NEO4J_LABELS = {
     "ActiveIngredient": 7,
@@ -42,9 +42,20 @@ EXPECTED_NEO4J_LABELS = {
     "DrugProduct": 3,
     "SafetyContext": 4,
 }
+REBUILT_NEO4J_LABELS = {
+    "ActiveIngredient": 8,
+    "Condition": 1,
+    "DrugClass": 6,
+    "DrugProduct": 4,
+    "SafetyContext": 4,
+}
 EXPECTED_NEO4J_RELATIONSHIPS = {
     "BELONGS_TO_CLASS": 11,
     "HAS_ACTIVE_INGREDIENT": 4,
+}
+REBUILT_NEO4J_RELATIONSHIPS = {
+    "BELONGS_TO_CLASS": 13,
+    "HAS_ACTIVE_INGREDIENT": 5,
 }
 
 
@@ -82,7 +93,7 @@ async def validate_qdrant(checks: list[dict[str, Any]], errors: list[str]) -> No
 
         for role, collection_name, expected_points in (
             ("chunk", EXPECTED_CHUNK_COLLECTION, None),
-            ("entity", EXPECTED_ENTITY_COLLECTION, EXPECTED_ENTITY_POINTS),
+            ("entity", EXPECTED_ENTITY_COLLECTION, ACCEPTABLE_ENTITY_POINTS),
         ):
             if collection_name not in existing:
                 add_check(
@@ -110,7 +121,7 @@ async def validate_qdrant(checks: list[dict[str, Any]], errors: list[str]) -> No
                 and schema["has_bm25"]
                 and schema["sparse_vector_name"] == "bm25"
             )
-            points_passed = points_count > 0 if expected_points is None else points_count == expected_points
+            points_passed = points_count > 0 if expected_points is None else points_count in expected_points
             add_check(
                 checks,
                 errors,
@@ -213,12 +224,19 @@ async def validate_neo4j(checks: list[dict[str, Any]], errors: list[str]) -> Non
                 "labels": label_counts,
                 "relationship_types": rel_counts,
             }
-            passed = (
+            baseline_ok = (
                 node_total == 21
                 and rel_total == 15
                 and label_counts == EXPECTED_NEO4J_LABELS
                 and rel_counts == EXPECTED_NEO4J_RELATIONSHIPS
             )
+            rebuilt_ok = (
+                node_total == 23
+                and rel_total == 18
+                and label_counts == REBUILT_NEO4J_LABELS
+                and rel_counts == REBUILT_NEO4J_RELATIONSHIPS
+            )
+            passed = baseline_ok or rebuilt_ok
             add_check(
                 checks,
                 errors,

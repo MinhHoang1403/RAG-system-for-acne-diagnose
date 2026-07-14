@@ -7,8 +7,8 @@ def test_taxonomy_graph_planner_is_dry_run() -> None:
     plan = build_taxonomy_graph_update_plan()
 
     assert plan["mutation_executed"] is False
-    assert plan["current"]["node_count"] == 21
-    assert plan["proposed"]["node_count"] == 21
+    assert plan["current"]["node_count"] == 23
+    assert plan["proposed"]["node_count"] == 23
 
 
 def test_taxonomy_graph_planner_reports_no_delete_execution() -> None:

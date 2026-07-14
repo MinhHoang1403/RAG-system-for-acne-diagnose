@@ -34,6 +34,15 @@ drug_products:
     drug_class:
       - topical_antibiotic
 
+  tazorac:
+    canonical_name: Tazorac
+    aliases:
+      - tazorac
+    active_ingredients:
+      - tazarotene
+    drug_class:
+      - topical_retinoid
+
 active_ingredients:
   adapalene:
     canonical_name: adapalene
@@ -66,6 +75,14 @@ active_ingredients:
     canonical_name: tretinoin
     aliases:
       - tretinoin
+    drug_class:
+      - topical_retinoid
+
+  tazarotene:
+    canonical_name: tazarotene
+    aliases:
+      - tazarotene
+      - tazaroten
     drug_class:
       - topical_retinoid
 

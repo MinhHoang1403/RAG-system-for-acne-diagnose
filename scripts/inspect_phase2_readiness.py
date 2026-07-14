@@ -47,10 +47,22 @@ EXPECTED_NEO4J_LABELS = {
     "DrugProduct": 3,
     "SafetyContext": 4,
 }
+REBUILT_NEO4J_LABELS = {
+    "ActiveIngredient": 8,
+    "Condition": 1,
+    "DrugClass": 6,
+    "DrugProduct": 4,
+    "SafetyContext": 4,
+}
 EXPECTED_NEO4J_RELATIONSHIPS = {
     "BELONGS_TO_CLASS": 11,
     "HAS_ACTIVE_INGREDIENT": 4,
 }
+REBUILT_NEO4J_RELATIONSHIPS = {
+    "BELONGS_TO_CLASS": 13,
+    "HAS_ACTIVE_INGREDIENT": 5,
+}
+ACCEPTABLE_ENTITY_POINTS = {20, 22}
 
 
 def _check(
@@ -85,7 +97,7 @@ async def inspect_qdrant() -> dict[str, Any]:
 
         for role, collection_name, expected_points in (
             ("chunk", chunk_collection, None),
-            ("entity", entity_collection, 20),
+            ("entity", entity_collection, ACCEPTABLE_ENTITY_POINTS),
         ):
             if collection_name not in existing:
                 checks.append(
@@ -113,7 +125,7 @@ async def inspect_qdrant() -> dict[str, Any]:
                 and schema["has_bm25"]
                 and schema["sparse_vector_name"] == "bm25"
             )
-            points_ok = points_count > 0 if expected_points is None else points_count == expected_points
+            points_ok = points_count > 0 if expected_points is None else points_count in expected_points
             checks.append(
                 _check(
                     f"qdrant_{role}_schema_and_points",
@@ -168,12 +180,19 @@ async def inspect_neo4j() -> dict[str, Any]:
             "labels": label_counts,
             "relationship_types": rel_counts,
         }
-        passed = (
+        baseline_ok = (
             node_total == 21
             and rel_total == 15
             and label_counts == EXPECTED_NEO4J_LABELS
             and rel_counts == EXPECTED_NEO4J_RELATIONSHIPS
         )
+        rebuilt_ok = (
+            node_total == 23
+            and rel_total == 18
+            and label_counts == REBUILT_NEO4J_LABELS
+            and rel_counts == REBUILT_NEO4J_RELATIONSHIPS
+        )
+        passed = baseline_ok or rebuilt_ok
         checks.append(
             _check(
                 "neo4j_deterministic_graph",

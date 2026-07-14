@@ -8,9 +8,11 @@ def test_v2_entity_cards_include_verified_only() -> None:
     catalog = load_taxonomy_catalog()
     cards = catalog.to_entity_cards(verified_only=True)
 
-    assert len(cards) == 21
+    assert len(cards) == 23
     assert all(card.metadata["review_status"] == "verified" for card in cards)
     assert any(card.entity_type == "drug_class" and card.canonical_name == "azelaic_acid" for card in cards)
+    assert any(card.entity_type == "drug_product" and card.canonical_name == "Tazorac" for card in cards)
+    assert any(card.entity_type == "active_ingredient" and card.canonical_name == "tazarotene" for card in cards)
 
 
 def test_v2_entity_card_payload_keeps_runtime_contract() -> None:

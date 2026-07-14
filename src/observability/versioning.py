@@ -15,6 +15,7 @@ DEFAULT_REPRODUCIBLE_ENVIRONMENT_VERSION = "reproducible_environment_v1"
 DEFAULT_END_TO_END_RELEASE_READINESS_VERSION = "end_to_end_release_readiness_v1"
 DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v3"
 DEFAULT_LLM_FALLBACK_POLICY_VERSION = "llm_fallback_policy_v2"
+DEFAULT_ENTITY_FOUNDATION_VERSION = "entity_foundation_v2"
 LEGACY_ANSWER_CACHE_VERSIONS = {"v1", "v2", "v3", "v4"}
 LEGACY_ANSWER_FORMATTING_CONTRACT_VERSIONS = {"answer_formatting_contract_v1", "answer_formatting_contract_v2"}
 
@@ -76,6 +77,10 @@ def build_pipeline_version_manifest(settings: Mapping[str, Any] | None = None) -
         "ollama_model": value("OLLAMA_MODEL", "qwen3:8b") or "qwen3:8b",
         "neo4j_schema_version": value("NEO4J_SCHEMA_VERSION", "neo4j_schema_v1"),
         "taxonomy_version": value("TAXONOMY_VERSION", "drug_taxonomy_v1"),
+        "entity_foundation_version": value(
+            "ENTITY_FOUNDATION_VERSION",
+            DEFAULT_ENTITY_FOUNDATION_VERSION,
+        ),
         "cache_schema_version": value("CACHE_SCHEMA_VERSION", "v3"),
         "answer_cache_version": answer_cache_version,
         "embedding_model": value("EMBEDDING_MODEL", "models/gemini-embedding-2"),
@@ -168,6 +173,7 @@ def pipeline_manifest_summary(manifest: dict[str, Any] | None = None) -> dict[st
         "runtime_resilience_version",
         "neo4j_schema_version",
         "taxonomy_version",
+        "entity_foundation_version",
         "cache_schema_version",
         "answer_cache_version",
         "embedding_model",
@@ -292,6 +298,7 @@ def _runtime_entity_collection_name(settings: Mapping[str, Any]) -> str:
 __all__ = [
     "DEFAULT_ANSWER_CACHE_VERSION",
     "DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION",
+    "DEFAULT_ENTITY_FOUNDATION_VERSION",
     "DEFAULT_END_TO_END_RELEASE_READINESS_VERSION",
     "DEFAULT_GOOGLE_GENAI_SDK_VERSION",
     "DEFAULT_LLM_FALLBACK_POLICY_VERSION",

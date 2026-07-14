@@ -35,7 +35,7 @@ from src.knowledge.schemas import EntityCard  # noqa: E402
 from src.knowledge.versioning import get_embedding_metadata  # noqa: E402
 
 
-PREVIEW_NAMES = {"Dalacin T", "Epiduo", "Differin", "benzoyl_peroxide"}
+PREVIEW_NAMES = {"Dalacin T", "Epiduo", "Differin", "Tazorac", "benzoyl_peroxide", "tazarotene"}
 
 
 def parse_args() -> argparse.Namespace:

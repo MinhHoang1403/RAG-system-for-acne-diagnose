@@ -34,7 +34,7 @@ from src.knowledge.graph_schema import (  # noqa: E402
 from src.knowledge.versioning import get_knowledge_versions  # noqa: E402
 
 
-PREVIEW_NAMES = {"Dalacin T", "Epiduo", "Differin", "benzoyl_peroxide"}
+PREVIEW_NAMES = {"Dalacin T", "Epiduo", "Differin", "Tazorac", "benzoyl_peroxide", "tazarotene"}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

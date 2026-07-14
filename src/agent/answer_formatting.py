@@ -340,6 +340,34 @@ def _deterministic_profile_answer(
             "- Nếu dùng, nên bắt đầu thận trọng, từng sản phẩm một và ngưng dùng và hỏi bác sĩ nếu kích ứng rõ."
         )
 
+    if "tazorac" in text and _is_comparison_question(text):
+        includes_epiduo = "epiduo" in text
+        rows = [
+            "| Sản phẩm | Hoạt chất chính | Nhóm thuốc |",
+            "|---|---|---|",
+            "| Tazorac | Tazarotene | Retinoid bôi/topical retinoid. |",
+        ]
+        if "differin" in text:
+            rows.append("| Differin | Adapalene | Retinoid bôi/topical retinoid. |")
+        if includes_epiduo:
+            rows.append("| Epiduo | Adapalene + benzoyl peroxide | Phối hợp retinoid bôi và benzoyl peroxide. |")
+        if includes_epiduo:
+            note = (
+                "Tazarotene và adapalene đều thuộc nhóm retinoid bôi, còn benzoyl peroxide không phải kháng sinh; "
+                "đây là hoạt chất bôi có tác dụng kháng khuẩn/antimicrobial và hỗ trợ giảm bít tắc nhẹ."
+            )
+        else:
+            note = (
+                "Tazarotene và adapalene đều thuộc nhóm retinoid bôi, nhưng là hai hoạt chất khác nhau; "
+                "lựa chọn sản phẩm nên dựa trên chỉ định, mức độ dung nạp và tư vấn của bác sĩ."
+            )
+        return (
+            "Các sản phẩm này khác nhau chủ yếu ở hoạt chất chính.\n\n"
+            + "\n".join(rows)
+            + "\n\n"
+            + note
+        )
+
     if "differin" in text and "epiduo" in text and _is_comparison_question(text):
         return (
             "Hai sản phẩm khác nhau chủ yếu ở thành phần: Differin chứa adapalene, còn Epiduo chứa adapalene kết hợp benzoyl peroxide.\n\n"

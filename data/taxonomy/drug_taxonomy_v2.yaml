@@ -83,6 +83,25 @@ entities:
     taxonomy_version: drug_taxonomy_v2
     entity_schema_version: entity_schema_v2
 
+  - canonical_name: Tazorac
+    entity_type: drug_product
+    display_name: Tazorac
+    aliases: [tazorac]
+    active_ingredients: [tazarotene]
+    drug_classes: [topical_retinoid]
+    dosage_forms: [topical]
+    route: topical
+    source_references:
+      - source_id: web_raw_dataset:tazarotene_tazorac_brand
+        source_type: json
+        locator: "sample_data/web_raw_dataset.json#raw_text:Tazarotene(Brand names:Tazorac)"
+        note: >
+          Source corpus states "Tazarotene (Brand names: ... Tazorac)"
+          and "tazarotene (Tazorac)".
+    review_status: verified
+    taxonomy_version: drug_taxonomy_v2
+    entity_schema_version: entity_schema_v2
+
   - canonical_name: adapalene
     entity_type: active_ingredient
     display_name: adapalene
@@ -131,6 +150,22 @@ entities:
       - source_id: drug_taxonomy_v1:active_ingredients.tretinoin
         source_type: existing_taxonomy
         locator: data/taxonomy/drug_aliases.yaml#active_ingredients.tretinoin
+    review_status: verified
+    taxonomy_version: drug_taxonomy_v2
+    entity_schema_version: entity_schema_v2
+
+  - canonical_name: tazarotene
+    entity_type: active_ingredient
+    display_name: tazarotene
+    aliases: [tazarotene, tazaroten]
+    drug_classes: [topical_retinoid]
+    source_references:
+      - source_id: web_raw_dataset:tazarotene_topical_retinoid
+        source_type: json
+        locator: "sample_data/web_raw_dataset.json#raw_text:Prescription retinoids Tazarotene"
+        note: >
+          Source corpus lists tazarotene among prescription/topical retinoids
+          and maps Tazorac as a brand name.
     review_status: verified
     taxonomy_version: drug_taxonomy_v2
     entity_schema_version: entity_schema_v2
