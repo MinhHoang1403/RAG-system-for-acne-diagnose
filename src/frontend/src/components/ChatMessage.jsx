@@ -1,27 +1,11 @@
 import { formatText } from '../utils/markdown.js';
+import { responseBadgeLabel, sourceDisplayLabels } from '../utils/presentationMetadata.js';
 import DebugPanel from './DebugPanel.jsx';
-
-function modelDisplayName(provider, model) {
-  const modelId = model || '';
-  if (provider === 'gemini' || modelId.includes('gemini')) {
-    if (modelId.includes('3.5')) return 'Gemini 3.5 Flash';
-    if (modelId.includes('3.1-flash-lite')) return 'Gemini 3.1 Flash-Lite';
-    if (modelId.includes('2.5')) return 'Gemini 2.5 Flash';
-    return modelId || 'Gemini';
-  }
-  if (provider === 'ollama' || modelId.includes('qwen')) {
-    if (modelId.includes('qwen3:8b')) return 'Qwen3 8B Local';
-    if (modelId.includes('qwen3')) return 'Qwen3 Local';
-    if (modelId.includes('qwen2')) return 'Qwen2.5 Local';
-    return modelId ? `${modelId} Local` : 'Ollama';
-  }
-  if (provider === 'rule_based') return 'Rule-based';
-  return modelId || provider || 'Unknown model';
-}
 
 export default function ChatMessage({ msg }) {
   const isUser = msg.role === 'user';
   const data = msg.data || null;
+  const sourceLabels = sourceDisplayLabels(data);
 
   return (
     <div className="chat-message">
@@ -85,39 +69,16 @@ export default function ChatMessage({ msg }) {
 
                   {/* Sources & Metadata */}
                   <div className="chat-meta-row">
-                    {data.sources && data.sources.length > 0 && (
+                    {sourceLabels.length > 0 && (
                       <div className="chat-meta-sources">
                         <span className="chat-meta-label">Nguồn: </span>
-                        {data.sources.join(', ')}
+                        {sourceLabels.join(', ')}
                       </div>
                     )}
                     {data.metadata && (
                       <div className="chat-meta-info">
                         <span title="Mô hình ngôn ngữ">
-                          {(() => {
-                            const meta = data.metadata;
-                            if (meta.provider === 'system' || meta.model === 'guardrail-rule') return '🛡️ Guardrail';
-                            if (meta.cache && meta.cache.hit) {
-                              const fbName = modelDisplayName(
-                                meta.cached_from_provider,
-                                meta.cached_from_model,
-                              );
-                              return `♻️ Cached · originally answered by ${fbName}`;
-                            }
-                            if (meta.fallback_used && meta.fallback_provider) {
-                              const actualName = modelDisplayName(meta.provider, meta.model);
-                              const requestedName = modelDisplayName(
-                                meta.requested_provider,
-                                meta.requested_model,
-                              );
-                              return `⚠️ ${actualName} · dự phòng từ ${requestedName}`;
-                            }
-                            if (meta.provider === 'gemini') return `⚡ ${modelDisplayName(meta.provider, meta.model)}`;
-                            if (meta.provider === 'ollama') {
-                              return `🖥️ ${modelDisplayName(meta.provider, meta.model)}`;
-                            }
-                            return `⚡ ${meta.model}`;
-                          })()}
+                          {responseBadgeLabel(data.metadata)}
                         </span>
                         <span title="Phương pháp truy xuất">🔍 {data.metadata.retrieval}</span>
                         {data.metadata.guardrail === 'out_of_domain' && (

@@ -199,6 +199,7 @@ export default function App() {
             safety_flags: m.safety_flags || [],
             graph_facts: m.graph_facts || [],
             metadata: m.metadata || {},
+            source_metadata: m.metadata?.source_metadata || [],
           } : undefined,
         }));
 

@@ -247,6 +247,7 @@ async def run_clinical_agent(
         "standalone_question": final_state.get("standalone_question"),
         "symptoms": final_state.get("symptoms", []),
         "safety_flags": final_state.get("safety_flags", []),
+        "vector_contexts": final_state.get("vector_contexts", []),
         "sources": final_state.get("sources", []),
         "graph_facts": final_state.get("graph_facts", []),
         "retrieval_status": final_state.get("retrieval_status"),

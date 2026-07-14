@@ -18,7 +18,7 @@ ResponseProfile = Literal[
     "safe_fallback",
 ]
 
-ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v2"
+ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v3"
 
 CANONICAL_DISCLAIMER = "Thông tin mang tính tham khảo và không thay thế chẩn đoán của bác sĩ."
 LEGACY_DISCLAIMER = "Thông tin này chỉ mang tính tham khảo và không thay thế tư vấn y khoa chuyên nghiệp."
@@ -32,16 +32,17 @@ LEGACY_BOILERPLATE_HEADINGS = (
 )
 
 ANSWER_FORMATTING_CONTRACT = """\
-ANSWER PRESENTATION CONTRACT V2:
+ANSWER PRESENTATION CONTRACT V3:
 - Dùng cùng một chuẩn trình bày cho Gemini, Gemini fallback, Ollama, cache hit, guardrail, severity guard và safe fallback; provider không được quyết định format.
 - Không lặp lại hoặc dùng nguyên câu hỏi của người dùng làm tiêu đề. Bắt đầu ngay bằng câu trả lời.
 - Trả lời trực tiếp trước, sau đó mới giải thích. Chỉ bắt đầu bằng "Có." hoặc "Không." khi câu hỏi thật sự là yes/no.
 - Chọn cấu trúc theo response profile, không nối template nhiều mục vào mọi câu trả lời.
-- Routine: 100-250 từ, ít heading hoặc không heading, chỉ thêm lưu ý khi thật sự cần.
+- Routine factual: ngắn gọn, không heading nếu chỉ hỏi định danh/thành phần; không thêm disclaimer trong thân answer khi UI đã có footer chung.
+- Routine skincare: dùng heading Markdown ngắn và bullet hành động rõ ràng; không gắn nhãn Guardrail nếu vẫn là câu hỏi in-domain.
 - Comparison: trả lời trực tiếp rồi dùng bảng Markdown GFM hoặc bullet đối chiếu; cover đủ các entity được hỏi.
-- Drug identity/composition: trả lời trực tiếp tên nhóm/hoạt chất, giải thích ngắn vai trò; không mở đầu "Có." nếu câu hỏi không phải yes/no.
-- Safety/pregnancy: câu đầu nêu trực tiếp đối tượng được hỏi; tối đa ba section; không gộp thêm cho con bú nếu người dùng không hỏi.
-- Urgent/severe acne: nêu rõ cần bác sĩ da liễu đánh giá sớm, tránh nặn/bóp, không tự dùng isotretinoin hoặc thuốc kê đơn.
+- Drug identity/composition: trả lời trực tiếp tên nhóm/hoạt chất, giải thích ngắn vai trò; bullet khi có nhiều hoạt chất; không mở đầu "Có." nếu câu hỏi không phải yes/no.
+- Safety/pregnancy: câu đầu nêu trực tiếp đối tượng được hỏi; wording phải ưu tiên tránh/ngừng trong thai kỳ, không để người dùng hiểu rằng có thể tự tiếp tục dùng; chỉ render một warning.
+- Urgent/severe acne: dùng heading Markdown và bullet; nêu rõ cần bác sĩ da liễu đánh giá sớm, tránh nặn/bóp, không tự dùng isotretinoin hoặc thuốc kê đơn.
 - Out-of-domain emergency: ngắn, trực tiếp, khuyên tìm trợ giúp y tế khẩn cấp; không dùng template mụn năm phần.
 - Không có heading rỗng, heading lặp, disclaimer lặp, cảnh báo lặp, câu ghép hỏng hoặc câu bị cắt.
 - Không đưa "Nguồn:" vào thân câu trả lời; hệ thống hiển thị nguồn riêng từ metadata.
@@ -115,7 +116,7 @@ def finalize_answer_presentation(
     severity: str | None = None,
     guardrail: str | None = None,
     fallback_type: str | None = None,
-    add_disclaimer: bool = True,
+    add_disclaimer: bool | None = None,
 ) -> str:
     """Apply deterministic presentation policy without inventing arbitrary medical content."""
 
@@ -152,7 +153,8 @@ def finalize_answer_presentation(
     if not draft:
         draft = "Tài liệu hiện có chưa đủ thông tin để trả lời chắc chắn."
 
-    if add_disclaimer and profile not in {"out_of_domain_emergency", "safe_fallback"}:
+    should_add_disclaimer = _should_add_answer_disclaimer(profile) if add_disclaimer is None else add_disclaimer
+    if should_add_disclaimer and profile not in {"out_of_domain_emergency", "safe_fallback"}:
         draft = _append_disclaimer_once(draft, CANONICAL_DISCLAIMER)
 
     return draft.strip()
@@ -293,13 +295,14 @@ def _deterministic_profile_answer(
     if "mang thai" in text or "co thai" in text or "co bau" in text:
         if "adapalene" in text or "adapalen" in text or "retinoid" in text:
             return (
-                "Không nên dùng adapalene khi đang mang thai nếu chưa được bác sĩ da liễu hoặc sản khoa đánh giá.\n\n"
+                "Nên tránh hoặc ngừng dùng adapalene trong thai kỳ và trao đổi với bác sĩ da liễu hoặc bác sĩ sản khoa.\n\n"
                 "## Việc nên làm\n"
-                "- Tạm ngưng hoặc chưa bắt đầu adapalene cho đến khi được bác sĩ xác nhận lựa chọn phù hợp.\n"
+                "- Tạm ngưng hoặc chưa bắt đầu adapalene cho đến khi được bác sĩ xác nhận lựa chọn an toàn hơn.\n"
                 "- Ưu tiên chăm sóc nền dịu nhẹ: rửa mặt nhẹ, dưỡng ẩm phù hợp và chống nắng.\n"
                 "- Nếu đã lỡ dùng, hãy ghi lại thời gian, sản phẩm/nồng độ và trao đổi với bác sĩ để được tư vấn cụ thể.\n\n"
                 "## Khi nào cần trao đổi với bác sĩ\n"
-                "Nên hỏi bác sĩ da liễu hoặc sản khoa nếu mụn viêm nhiều, đau, lan rộng, có nguy cơ sẹo hoặc bạn cần chọn thuốc trị mụn trong thai kỳ."
+                "- Khi bạn cần chọn thuốc trị mụn trong thai kỳ.\n"
+                "- Khi mụn viêm nhiều, đau, lan rộng hoặc có nguy cơ để lại sẹo."
             )
 
     if _is_severe_acne_question(text):
@@ -310,7 +313,8 @@ def _deterministic_profile_answer(
             "- Không tự dùng isotretinoin, kháng sinh uống hoặc thuốc kê đơn khi chưa được bác sĩ chỉ định.\n"
             "- Không nặn, bóp hoặc cạy các cục mụn sâu vì dễ làm viêm nặng hơn và tăng nguy cơ sẹo.\n\n"
             "## Trong lúc chờ khám\n"
-            "Giữ routine dịu nhẹ, tránh chà xát mạnh và tạm ngưng phối hợp nhiều hoạt chất dễ kích ứng nếu da đang đỏ rát."
+            "- Giữ routine dịu nhẹ, tránh chà xát mạnh.\n"
+            "- Tạm ngưng phối hợp nhiều hoạt chất dễ kích ứng nếu da đang đỏ rát."
         )
 
     if "mun viem nhe" in text and any(marker in text for marker in ["cham soc", "hang ngay", "hằng ngày"]):
@@ -321,7 +325,8 @@ def _deterministic_profile_answer(
             "- Dưỡng ẩm phù hợp, không gây bít tắc và dùng chống nắng ban ngày.\n"
             "- Không nặn/cạy mụn viêm vì dễ làm đỏ lâu, thâm hoặc sẹo.\n\n"
             "## Khi cân nhắc hoạt chất\n"
-            "Benzoyl peroxide hoặc salicylic acid không bị cấm mặc định, nhưng có thể gây khô rát/kích ứng. Nếu dùng, nên bắt đầu thận trọng, từng sản phẩm một và ngưng hỏi bác sĩ nếu kích ứng rõ."
+            "- Benzoyl peroxide hoặc salicylic acid không bị cấm mặc định, nhưng có thể gây khô rát/kích ứng.\n"
+            "- Nếu dùng, nên bắt đầu thận trọng, từng sản phẩm một và ngưng dùng và hỏi bác sĩ nếu kích ứng rõ."
         )
 
     if "epiduo" in text and any(marker in text for marker in ["gom", "hoat chat", "thanh phan", "moi hoat chat"]):
@@ -329,7 +334,7 @@ def _deterministic_profile_answer(
             "Epiduo chứa hai hoạt chất chính là adapalene và benzoyl peroxide.\n\n"
             "- Adapalene là retinoid bôi, giúp điều hòa sừng hóa nang lông, giảm bít tắc/nhân mụn và hỗ trợ chống viêm.\n"
             "- Benzoyl peroxide không phải kháng sinh; đây là hoạt chất bôi có tác dụng kháng khuẩn/antimicrobial với C. acnes và hỗ trợ tiêu sừng nhẹ.\n\n"
-            "Hai hoạt chất này có thể gây khô, đỏ, rát hoặc bong tróc; benzoyl peroxide còn có thể làm bạc màu vải/tóc. Nếu đang mang thai hoặc da kích ứng mạnh, nên hỏi bác sĩ trước khi dùng."
+            "Hai hoạt chất này có thể gây khô, đỏ, rát hoặc bong tróc; benzoyl peroxide còn có thể làm bạc màu vải/tóc. Nếu da kích ứng mạnh, nên ngưng dùng và hỏi bác sĩ."
         )
 
     if "epiduo" in text and any(marker in text for marker in ["bpo", "benzoyl peroxide", "benzoyl"]):
@@ -418,6 +423,7 @@ def _normalize_common_surface_errors(text: str) -> str:
         "nặn hoặc chèn": "nặn hoặc bóp",
         "mụn Chỉ dựa": "mụn. Chỉ dựa",
         "tình trạng mụn Chỉ dựa": "tình trạng mụn. Chỉ dựa",
+        "ngưng hỏi bác sĩ": "ngưng dùng và hỏi bác sĩ",
     }
     output = text
     for bad, good in replacements.items():
@@ -502,6 +508,12 @@ def _dedupe_disclaimer(text: str, disclaimer: str) -> str:
     if len(parts) <= 2:
         return text
     return disclaimer.join(parts[:2]) + "".join(parts[2:])
+
+
+def _should_add_answer_disclaimer(profile: ResponseProfile) -> bool:
+    # The frontend already renders a global medical-information footer. Keep
+    # answer-level disclaimers opt-in to avoid repeating generic safety text.
+    return False
 
 
 def _trim_incomplete_terminal_paragraph(text: str) -> str:

@@ -155,7 +155,11 @@ async def test_chat_metadata_exposes_requested_and_actual_model(monkeypatch):
         return {
             "answer": "Benzoyl peroxide không phải là kháng sinh.",
             "session_id": kwargs["session_id"],
-            "sources": ["fixture.pdf"],
+            "sources": ["entity:active_ingredient", "fixture.pdf"],
+            "vector_contexts": [
+                {"source_file": "entity:active_ingredient", "retrieval_source": "entity"},
+                {"source_file": "fixture.pdf", "document_title": "Fixture Acne Guide"},
+            ],
             "symptoms": [],
             "safety_flags": [],
             "graph_facts": [],
@@ -226,3 +230,8 @@ async def test_chat_metadata_exposes_requested_and_actual_model(monkeypatch):
     assert metadata["fallback_used"] is True
     assert metadata["fallback_reason"] == "quota_exhausted"
     assert metadata["fallback_chain"][1]["model"] == "gemini-3.1-flash-lite"
+    assert metadata["response_origin"] == "llm"
+    assert metadata["guardrail_applied"] is False
+    body = response.json()
+    assert body["sources"] == ["Cơ sở tri thức hoạt chất", "Fixture Acne Guide"]
+    assert body["source_metadata"][0]["source_id"] == "entity:active_ingredient"

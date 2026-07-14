@@ -13,9 +13,10 @@ DEFAULT_RERANKER_VERSION = "reranker_pipeline_v2"
 DEFAULT_GOOGLE_GENAI_SDK_VERSION = "google_genai_sdk_v1"
 DEFAULT_REPRODUCIBLE_ENVIRONMENT_VERSION = "reproducible_environment_v1"
 DEFAULT_END_TO_END_RELEASE_READINESS_VERSION = "end_to_end_release_readiness_v1"
-DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v2"
+DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v3"
 DEFAULT_LLM_FALLBACK_POLICY_VERSION = "llm_fallback_policy_v2"
 LEGACY_ANSWER_CACHE_VERSIONS = {"v1", "v2", "v3", "v4"}
+LEGACY_ANSWER_FORMATTING_CONTRACT_VERSIONS = {"answer_formatting_contract_v1", "answer_formatting_contract_v2"}
 
 _SECRET_KEY_MARKERS = (
     "api_key",
@@ -46,9 +47,11 @@ def build_pipeline_version_manifest(settings: Mapping[str, Any] | None = None) -
         "context_packer_version": value("CONTEXT_PACKER_VERSION", "context_packer_v3"),
         "reranker_version": value("RERANKER_VERSION", DEFAULT_RERANKER_VERSION),
         "answer_verifier_version": value("ANSWER_VERIFIER_VERSION", "answer_verifier_v2"),
-        "answer_formatting_contract_version": value(
-            "ANSWER_FORMATTING_CONTRACT_VERSION",
-            DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION,
+        "answer_formatting_contract_version": _effective_answer_formatting_contract_version(
+            value(
+                "ANSWER_FORMATTING_CONTRACT_VERSION",
+                DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION,
+            )
         ),
         "severity_guard_version": value("SEVERITY_GUARD_VERSION", "severity_aware_answer_guard_v1"),
         "safe_fallback_flow_version": value("SAFE_FALLBACK_FLOW_VERSION", "safe_fallback_flow_v1"),
@@ -202,6 +205,15 @@ def _effective_answer_cache_version(configured: Any) -> str:
         return DEFAULT_ANSWER_CACHE_VERSION
     if text.lower() in LEGACY_ANSWER_CACHE_VERSIONS:
         return DEFAULT_ANSWER_CACHE_VERSION
+    return text
+
+
+def _effective_answer_formatting_contract_version(configured: Any) -> str:
+    text = str(configured or "").strip()
+    if not text:
+        return DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION
+    if text.lower() in LEGACY_ANSWER_FORMATTING_CONTRACT_VERSIONS:
+        return DEFAULT_ANSWER_FORMATTING_CONTRACT_VERSION
     return text
 
 
