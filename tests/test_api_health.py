@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from src.api.app import app
+from src.api.app import app, parse_cors_origins
 
 
 @pytest.mark.asyncio
@@ -35,6 +35,86 @@ async def test_health_returns_ok(monkeypatch):
     data = response.json()
     assert data["status"] == "ok"
     assert data["service"] == "acne-advisor-api"
+
+
+@pytest.mark.asyncio
+async def test_health_returns_degraded_with_reachable_backend(monkeypatch):
+    async def fake_preflight():
+        return {
+            "status": "degraded",
+            "checks": {
+                "postgres": {"status": "ok"},
+                "qdrant": {"status": "unavailable"},
+                "neo4j": {"status": "ok"},
+                "redis": {"status": "ok"},
+                "ollama": {"status": "ok"},
+            },
+        }
+
+    monkeypatch.setattr("src.api.preflight.run_phase2_preflight", fake_preflight)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/health")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert data["qdrant"] == "unavailable"
+    assert data["checks"]["qdrant"]["status"] == "unavailable"
+
+
+def test_parse_cors_origins_defaults_and_dedupes():
+    origins = parse_cors_origins(" http://localhost:5173/, http://127.0.0.1:5173, http://localhost:5173, * ")
+
+    assert origins == ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+
+@pytest.mark.asyncio
+async def test_cors_allows_localhost_and_127(monkeypatch):
+    async def fake_preflight():
+        return {
+            "status": "ok",
+            "checks": {
+                "postgres": {"status": "ok"},
+                "qdrant": {"status": "ok"},
+                "neo4j": {"status": "ok"},
+                "redis": {"status": "ok"},
+                "ollama": {"status": "ok"},
+            },
+        }
+
+    monkeypatch.setattr("src.api.preflight.run_phase2_preflight", fake_preflight)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        localhost = await client.options(
+            "/health",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        loopback = await client.options(
+            "/health",
+            headers={
+                "Origin": "http://127.0.0.1:5173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        unknown = await client.options(
+            "/health",
+            headers={
+                "Origin": "http://malicious.local:5173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+    assert localhost.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert loopback.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+    assert "access-control-allow-origin" not in unknown.headers
 
 
 @pytest.mark.asyncio

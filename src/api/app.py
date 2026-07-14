@@ -46,6 +46,32 @@ MAX_QUESTION_MARKS = int(os.getenv("MAX_QUESTION_MARKS", 3))
 MAX_CONVERSATION_HISTORY_MESSAGES = int(os.getenv("MAX_CONVERSATION_HISTORY_MESSAGES", 10))
 MAX_HISTORY_MESSAGE_CHARS = int(os.getenv("MAX_HISTORY_MESSAGE_CHARS", 1000))
 CACHE_ANSWER_VERSION = get_answer_cache_version()
+
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
+
+
+def parse_cors_origins(raw_value: str | None = None) -> list[str]:
+    """Parse explicit CORS origins without falling back to unsafe wildcard."""
+
+    raw = raw_value if raw_value is not None else os.getenv("CORS_ALLOW_ORIGINS", "")
+    candidates = raw.split(",") if raw.strip() else list(DEFAULT_CORS_ORIGINS)
+    origins: list[str] = []
+    seen: set[str] = set()
+    for origin in candidates:
+        normalized = origin.strip().rstrip("/")
+        if not normalized or normalized in seen:
+            continue
+        if normalized == "*":
+            logger.warning("Ignoring wildcard CORS origin because credentials are enabled.")
+            continue
+        origins.append(normalized)
+        seen.add(normalized)
+    return origins or list(DEFAULT_CORS_ORIGINS)
 RELEASE_READINESS_TEST_MODES = {"http_double", "deterministic"}
 
 # In-memory lock for session requests
@@ -159,12 +185,7 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=parse_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

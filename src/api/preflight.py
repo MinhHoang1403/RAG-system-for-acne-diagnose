@@ -21,6 +21,7 @@ NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+PREFLIGHT_CHECK_TIMEOUT_SECONDS = float(os.getenv("PREFLIGHT_CHECK_TIMEOUT_SECONDS", "4.0"))
 
 
 @dataclass
@@ -176,13 +177,20 @@ async def check_ollama() -> CheckResult:
         return CheckResult("unavailable", str(exc))
 
 
+async def _bounded_check(name: str, check_coro: Any) -> CheckResult:
+    try:
+        return await asyncio.wait_for(check_coro, timeout=PREFLIGHT_CHECK_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        return CheckResult("timeout", f"{name} health check exceeded {PREFLIGHT_CHECK_TIMEOUT_SECONDS:.1f}s")
+
+
 async def run_phase2_preflight() -> dict[str, Any]:
     postgres, qdrant, neo4j, redis, ollama = await asyncio.gather(
-        check_postgres(),
-        check_qdrant(),
-        check_neo4j(),
-        check_redis(),
-        check_ollama(),
+        _bounded_check("postgres", check_postgres()),
+        _bounded_check("qdrant", check_qdrant()),
+        _bounded_check("neo4j", check_neo4j()),
+        _bounded_check("redis", check_redis()),
+        _bounded_check("ollama", check_ollama()),
     )
     checks = {
         "postgres": postgres.to_dict(),

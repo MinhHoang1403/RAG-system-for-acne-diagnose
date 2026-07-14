@@ -277,9 +277,12 @@ async def offline_api_contract_checks() -> list[dict[str, Any]]:
 
 def inspect_frontend_contract() -> dict[str, Any]:
     api_client = PROJECT_ROOT / "src" / "frontend" / "src" / "api" / "chatApi.js"
+    api_config = PROJECT_ROOT / "src" / "frontend" / "src" / "config" / "api.js"
     package_json = PROJECT_ROOT / "src" / "frontend" / "package.json"
     lock_file = PROJECT_ROOT / "src" / "frontend" / "package-lock.json"
     source = api_client.read_text(encoding="utf-8") if api_client.exists() else ""
+    config_source = api_config.read_text(encoding="utf-8") if api_config.exists() else ""
+    combined_source = f"{source}\n{config_source}"
     package = json.loads(package_json.read_text(encoding="utf-8")) if package_json.exists() else {}
     scripts = package.get("scripts", {})
     details = {
@@ -287,7 +290,7 @@ def inspect_frontend_contract() -> dict[str, Any]:
         "lock_file": lock_file.exists(),
         "build_script": "build" in scripts,
         "lint_script": "lint" in scripts,
-        "uses_vite_api_url": "import.meta.env.VITE_API_URL" in source,
+        "uses_vite_api_url": "VITE_API_URL" in combined_source,
         "chat_endpoint": "/chat" in source,
         "health_endpoint": "/health" in source,
         "structured_error_parser": "parseApiError" in source and "error.status" in source and "error.code" in source,

@@ -470,6 +470,33 @@ npm run preview
 Frontend đọc `VITE_API_URL`. Nếu biến này unset, API client fallback về
 `http://127.0.0.1:8000`.
 
+## Khởi động local ổn định
+
+Bạn có thể dùng script an toàn sau để kiểm tra Docker, port backend và mở đúng
+backend/frontend mà không reset dữ liệu:
+
+```powershell
+.\scripts\start_local_dev.ps1
+```
+
+Script này chạy `docker compose up -d`, kiểm tra port `8000`, tái sử dụng backend
+nếu `/health` đã phản hồi, và dừng với thông báo PID/process nếu port đang bị
+process khác chiếm. Script không kill process lạ, không chạy ingestion và không
+dùng `docker compose down -v`.
+
+Cấu hình local khuyến nghị:
+
+```env
+VITE_API_URL=http://127.0.0.1:8000
+CORS_ALLOW_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000
+PREFLIGHT_CHECK_TIMEOUT_SECONDS=4.0
+```
+
+Frontend tự phân biệt `checking`, `connected`, `degraded`, `disconnected` và sẽ
+tự kiểm tra lại khi backend khởi động muộn hoặc restart. HTTP lỗi từ `/chat`
+như `503` hoặc `504` vẫn chứng minh backend reachable và không bị xem là mất kết
+nối mạng.
+
 ## Kiểm tra trước khi mở giao diện
 
 Chạy lệnh sau trước khi mở UI để kiểm tra runtime local:
