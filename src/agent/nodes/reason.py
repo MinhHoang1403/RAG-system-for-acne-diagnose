@@ -54,16 +54,9 @@ async def safety_check_node(state: ClinicalState) -> dict:
     has_pregnancy = any(kw in question_lower for kw in pregnancy_keywords)
 
     if has_retinoid and has_pregnancy:
-        # Find which retinoid was mentioned for a specific warning
-        matched_retinoid = next(
-            (kw for kw in retinoid_keywords if kw in question_lower),
-            "retinoid",
-        )
-        flags.append(
-            f"Cảnh báo nghiêm trọng: {matched_retinoid.capitalize()} cần tránh "
-            f"hoặc chỉ dùng dưới sự giám sát chặt chẽ của bác sĩ chuyên khoa "
-            f"trong thai kỳ hoặc khi có kế hoạch mang thai."
-        )
+        # Presentation V3 renders the pregnancy warning inside the answer body.
+        # Avoid a second UI-level "Cảnh báo nghiêm trọng" banner for the same risk.
+        logger.debug("Retinoid pregnancy safety context detected; warning will be integrated in final answer.")
 
     logger.debug(f"Safety flags: {flags}")
     return {"safety_flags": flags}

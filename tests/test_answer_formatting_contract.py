@@ -14,6 +14,7 @@ from src.agent.answer_formatting import (
 from src.agent.nodes import reason as reason_node
 from src.agent.nodes.respond import finalize_response_node
 from src.agent.prompts.medical_answer import build_medical_prompt
+from src.agent.source_presentation import build_source_metadata, display_names_for_sources
 from src.quality.safe_fallback import build_safe_fallback_answer
 
 
@@ -26,9 +27,9 @@ def test_formatting_contract_avoids_mandatory_boilerplate_sections():
         graph_facts=[],
     )
 
-    assert ANSWER_FORMATTING_CONTRACT_VERSION == "answer_formatting_contract_v2"
+    assert ANSWER_FORMATTING_CONTRACT_VERSION == "answer_formatting_contract_v3"
     assert ANSWER_FORMATTING_CONTRACT in prompt
-    assert "ANSWER PRESENTATION CONTRACT V2" in prompt
+    assert "ANSWER PRESENTATION CONTRACT V3" in prompt
     assert "provider không được quyết định format" in prompt
     assert "3-5 đoạn ngắn gồm tóm tắt" not in prompt
     assert "Mục **Lưu ý** phải có câu" not in prompt
@@ -97,7 +98,7 @@ async def test_finalize_does_not_wrap_short_valid_answer_in_generic_template():
     assert answer.startswith("Differin thuộc nhóm retinoid bôi")
     assert "**Tóm tắt ngắn**" not in answer
     assert "Thông tin trả lời dựa trên phần tài liệu y khoa" not in answer
-    assert answer.count("Thông tin mang tính tham khảo") == 1
+    assert "Thông tin mang tính tham khảo" not in answer
 
 
 @pytest.mark.asyncio
@@ -169,9 +170,16 @@ async def test_finalize_pregnancy_safety_preserves_warning():
     )
 
     answer = result["final_answer"]
-    assert answer.startswith("Không nên dùng adapalene")
-    assert "bác sĩ da liễu hoặc sản khoa" in answer
-    assert answer.count("Thông tin mang tính tham khảo") == 1
+    first_line = answer.splitlines()[0]
+    assert "adapalene" in first_line
+    assert "tránh hoặc ngừng" in first_line
+    assert "nếu chưa được bác sĩ" not in first_line
+    assert "bác sĩ da liễu hoặc bác sĩ sản khoa" in answer
+    assert "Cảnh báo nghiêm trọng" not in answer
+    assert "cho con bú" not in answer
+    assert answer.count("thai kỳ") == 2
+    assert "- Tạm ngưng" in answer
+    assert "Thông tin mang tính tham khảo" not in answer
 
 
 @pytest.mark.asyncio
@@ -192,7 +200,10 @@ async def test_finalize_severe_acne_keeps_escalation():
     answer = result["final_answer"]
     assert "bác sĩ da liễu" in answer
     assert "sẹo" in answer
-    assert "Không nặn" in answer
+    assert "## Việc nên làm" in answer
+    assert "- Không nặn" in answer
+    assert "## Trong lúc chờ khám" in answer
+    assert "- Giữ routine" in answer
     assert "Thông tin trả lời dựa trên phần tài liệu y khoa" not in answer
 
 
@@ -232,7 +243,7 @@ def test_finalizer_removes_empty_heading_duplicate_disclaimer_and_legacy_templat
 
     assert "**Tóm tắt ngắn**" not in answer
     assert "**Khi nào nên gặp bác sĩ**" not in answer
-    assert answer.count("Thông tin mang tính tham khảo") == 1
+    assert answer.count("Thông tin mang tính tham khảo") == 0
 
 
 def test_structural_quality_detects_incomplete_and_truncated_output():
@@ -256,6 +267,55 @@ def test_non_boolean_composition_does_not_start_with_yes_prefix():
 
     assert answer.startswith("Epiduo chứa hai hoạt chất")
     assert not answer.startswith("Có.")
+
+
+@pytest.mark.asyncio
+async def test_finalize_mild_acne_skincare_uses_bullets_and_fixed_wording():
+    result = await finalize_response_node(
+        {
+            "user_question": "Mụn viêm nhẹ nên chăm sóc da hằng ngày như thế nào?",
+            "draft_answer": "Rửa mặt dịu nhẹ và dùng dưỡng ẩm.",
+            "conversation_history": [],
+            "use_history_context": False,
+            "is_in_domain": True,
+            "guardrail": "in_domain",
+        }
+    )
+
+    answer = result["final_answer"]
+    assert "## Chăm sóc hằng ngày" in answer
+    assert "- Rửa mặt nhẹ nhàng" in answer
+    assert "ngưng dùng và hỏi bác sĩ nếu kích ứng rõ" in answer
+    assert "ngưng hỏi bác sĩ" not in answer
+    assert "Benzoyl peroxide hoặc salicylic acid không bị cấm mặc định" in answer
+    assert result["response_profile"] == "treatment"
+
+
+def test_source_metadata_keeps_raw_ids_but_exposes_friendly_display_names():
+    metadata = build_source_metadata(
+        ["web_raw_dataset.json", "entity:active_ingredient", "qd_4416_cut.pdf", "entity:active_ingredient"],
+        contexts=[
+            {"source_file": "qd_4416_cut.pdf", "document_title": "Guideline Acne Treatment"},
+            {"source_file": "web_raw_dataset.json", "source_type": "web_json"},
+        ],
+    )
+
+    assert [item["source_id"] for item in metadata] == [
+        "entity:active_ingredient",
+        "web_raw_dataset.json",
+        "qd_4416_cut.pdf",
+    ]
+    assert [item["display_name"] for item in metadata] == [
+        "Cơ sở tri thức hoạt chất",
+        "Bộ dữ liệu kiến thức mụn",
+        "Guideline Acne Treatment",
+    ]
+
+
+def test_source_display_fallback_humanizes_without_fabricating_title():
+    displays = display_names_for_sources(["qd_4416_cut.pdf", "unknown-source"])
+
+    assert displays == ["Qd 4416 Cut", "Unknown Source"]
 
 
 def test_boolean_question_keeps_valid_yes_prefix():

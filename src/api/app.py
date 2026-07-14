@@ -27,6 +27,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(name)s - %(mes
 logger = logging.getLogger(__name__)
 
 from src.agent.main import run_clinical_agent
+from src.agent.source_presentation import build_source_metadata, display_names_for_sources
 from src.agent.text_encoding import repair_mojibake
 from src.observability.versioning import get_answer_cache_version
 from src.resilience.exceptions import (
@@ -257,11 +258,14 @@ class ChatMetadata(BaseModel):
     cached_from_model: Optional[str] = None
     cached_at: Optional[str] = None
     phase2_debug: Optional[dict[str, Any]] = None
+    response_origin: Optional[str] = None
+    guardrail_applied: Optional[bool] = None
 
 class ChatResponse(BaseModel):
     answer: str
     session_id: Optional[str] = None
     sources: list[str] = Field(default_factory=list)
+    source_metadata: list[dict[str, Any]] = Field(default_factory=list)
     symptoms: list[str] = Field(default_factory=list)
     safety_flags: list[str] = Field(default_factory=list)
     graph_facts: list[dict[str, Any]] = Field(default_factory=list)
@@ -277,6 +281,25 @@ def _chat_metadata_identity(
     if provider == "system" and result.get("actual_model") is None:
         return provider, None
     return provider, result.get("actual_model") or request.llm_model or default_model
+
+
+def _response_origin(result: dict[str, Any], is_in_domain: Optional[bool]) -> str:
+    if result.get("cache_hit"):
+        return "cache"
+    if _guardrail_applied(result, is_in_domain):
+        return "guardrail"
+    if result.get("fallback_applied"):
+        return "safe_fallback"
+    if result.get("actual_provider") == "system":
+        return "deterministic"
+    return "llm"
+
+
+def _guardrail_applied(result: dict[str, Any], is_in_domain: Optional[bool]) -> bool:
+    guardrail = result.get("guardrail")
+    if is_in_domain is False:
+        return True
+    return bool(guardrail and guardrail not in {"in_domain", "in_domain_rule", "in_domain_followup_rule"})
 
 
 class RetrieveResponse(BaseModel):
@@ -736,7 +759,12 @@ async def chat_endpoint(request: ChatRequest):
         retrieval_status = result.get("retrieval_status") or ("hybrid_qdrant_neo4j" if used_retrieval else "skipped")
         
         answer_text = repair_mojibake(result.get("answer", ""))
-        sources_list = result.get("sources", [])
+        raw_sources_list = result.get("sources", [])
+        source_metadata = build_source_metadata(
+            raw_sources_list,
+            result.get("vector_contexts", []),
+        )
+        sources_list = display_names_for_sources(raw_sources_list, result.get("vector_contexts", []))
         symptoms_list = result.get("symptoms", [])
         safety_flags_list = result.get("safety_flags", [])
         answer_quality_report = result.get("answer_quality_report") or {}
@@ -766,6 +794,8 @@ async def chat_endpoint(request: ChatRequest):
             request,
             model_name,
         )
+        response_origin = _response_origin(result, is_in_domain)
+        guardrail_applied = _guardrail_applied(result, is_in_domain)
 
         # Build safe metadata dict for DB storage (no API keys, no raw exceptions)
         safe_db_metadata = {
@@ -781,6 +811,9 @@ async def chat_endpoint(request: ChatRequest):
             "retrieval": retrieval_status,
             "is_in_domain": is_in_domain,
             "guardrail": result.get("guardrail"),
+            "response_origin": response_origin,
+            "guardrail_applied": guardrail_applied,
+            "source_metadata": source_metadata,
             "used_retrieval": used_retrieval,
             "pipeline_fingerprint": pipeline_fingerprint,
             "pipeline_manifest": {
@@ -865,6 +898,7 @@ async def chat_endpoint(request: ChatRequest):
             answer=answer_text,
             session_id=session_id,
             sources=sources_list,
+            source_metadata=source_metadata,
             symptoms=symptoms_list,
             safety_flags=safety_flags_list,
             graph_facts=safe_graph_facts,
@@ -903,7 +937,9 @@ async def chat_endpoint(request: ChatRequest):
                 cached_from_provider=cached_from_provider,
                 cached_from_model=cached_from_model,
                 cached_at=cached_at,
-                phase2_debug=phase2_debug
+                phase2_debug=phase2_debug,
+                response_origin=response_origin,
+                guardrail_applied=guardrail_applied,
             )
         )
         

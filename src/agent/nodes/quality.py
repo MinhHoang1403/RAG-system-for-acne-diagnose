@@ -73,7 +73,7 @@ async def answer_quality_node(state: ClinicalState) -> dict[str, Any]:
             severity=severity_guard.classification.severity,
             guardrail=state.get("guardrail"),
             fallback_type=state.get("fallback_type") if state.get("fallback_applied") else None,
-            add_disclaimer=response_profile != "out_of_domain_emergency",
+            add_disclaimer=None,
         )
         report_data = guard.report.model_dump(mode="json")
         severity_data = severity_guard.classification.model_dump(mode="json")
