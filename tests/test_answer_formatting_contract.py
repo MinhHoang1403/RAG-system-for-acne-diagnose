@@ -305,6 +305,41 @@ def test_differin_epiduo_comparison_does_not_collapse_to_epiduo_only():
 
 
 @pytest.mark.asyncio
+async def test_finalize_tazorac_differin_epiduo_comparison_keeps_all_products():
+    result = await finalize_response_node(
+        {
+            "user_question": "Tazorac, Differin và Epiduo khác nhau về hoạt chất như thế nào?",
+            "draft_answer": "Differin chứa adapalene, còn Epiduo chứa adapalene và benzoyl peroxide.",
+            "conversation_history": [],
+            "use_history_context": False,
+            "is_in_domain": True,
+        }
+    )
+
+    answer = result["final_answer"]
+    assert answer.startswith("Các sản phẩm này khác nhau chủ yếu ở hoạt chất chính.")
+    assert "| Sản phẩm | Hoạt chất chính | Nhóm thuốc |" in answer
+    assert "| Tazorac | Tazarotene | Retinoid bôi/topical retinoid. |" in answer
+    assert "| Differin | Adapalene | Retinoid bôi/topical retinoid. |" in answer
+    assert "| Epiduo | Adapalene + benzoyl peroxide |" in answer
+    assert "benzoyl peroxide không phải kháng sinh" in answer
+
+
+def test_tazorac_differin_comparison_does_not_introduce_epiduo_or_bpo():
+    answer = finalize_answer_presentation(
+        "Differin chứa adapalene.",
+        user_question="Tazorac và Differin khác nhau thế nào?",
+    )
+
+    assert "Tazorac" in answer
+    assert "Tazarotene" in answer
+    assert "Differin" in answer
+    assert "Adapalene" in answer
+    assert "Epiduo" not in answer
+    assert "benzoyl peroxide" not in answer.lower()
+
+
+@pytest.mark.asyncio
 async def test_finalize_mild_acne_skincare_uses_bullets_and_fixed_wording():
     result = await finalize_response_node(
         {
