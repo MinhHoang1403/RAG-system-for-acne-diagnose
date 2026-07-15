@@ -9,8 +9,25 @@ function modelLabel(model) {
   return model.display_name || model.label || modelId(model);
 }
 
+function compactModelLabel(model) {
+  const fullLabel = modelLabel(model);
+  const id = modelId(model);
+  const normalized = `${fullLabel} ${id}`.toLowerCase();
+  if (normalized.includes('gemini') && normalized.includes('3.1')) return 'Gemini 3.1';
+  if (normalized.includes('gemini') && normalized.includes('3.5')) return 'Gemini 3.5';
+  if (normalized.includes('gemini') && normalized.includes('2.5')) return 'Gemini 2.5';
+  if (normalized.includes('qwen') && normalized.includes('8b')) return 'Qwen 8B';
+  if (normalized.includes('qwen')) return 'Qwen';
+  return fullLabel
+    .replace(/\s+Flash(?:-Lite)?/i, '')
+    .replace(/\s+Local/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export default function ModelSelector({ onModelConfigChange }) {
   const [models, setModels] = useState([]);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState(
     () => localStorage.getItem('acneAdvisorSelectedProvider') || 'gemini'
   );
@@ -76,36 +93,77 @@ export default function ModelSelector({ onModelConfigChange }) {
       setSelectedModel(modelId(selectedOption));
     }
   };
+  const selectedOption = models.find(m => `${m.provider}|${modelId(m)}` === `${selectedProvider}|${selectedModel}`);
+  const selectedTitle = selectedOption ? modelLabel(selectedOption) : selectedModel || 'Model';
 
   return (
     <div className="model-selector-container">
-      <select
-        value={`${selectedProvider}|${selectedModel}`}
-        onChange={handleModelChange}
-        disabled={loading}
-        className="model-selector-dropdown"
+      <div className="model-selector-main">
+        <select
+          id="model-selector"
+          value={`${selectedProvider}|${selectedModel}`}
+          onChange={handleModelChange}
+          disabled={loading}
+          className="model-selector-dropdown"
+          aria-label="Chọn model trả lời"
+          title={selectedTitle}
+        >
+          {loading && <option>Đang tải model...</option>}
+          {!loading && models.length === 0 && <option>Không có model khả dụng</option>}
+          {!loading && models.map(m => (
+            <option
+              key={`${m.provider}|${modelId(m)}`}
+              value={`${m.provider}|${modelId(m)}`}
+              disabled={!m.available}
+              title={modelLabel(m)}
+            >
+              {compactModelLabel(m)} {!m.available ? '(Offline)' : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <button
+        type="button"
+        className={`model-options-btn ${optionsOpen ? 'model-options-btn-active' : ''}`}
+        aria-expanded={optionsOpen}
+        aria-controls="model-advanced-options"
+        aria-label="Mở tùy chọn nâng cao"
+        title="Tùy chọn nâng cao"
+        onClick={() => setOptionsOpen((open) => !open)}
       >
-        {loading && <option>Đang tải model...</option>}
-        {!loading && models.length === 0 && <option>Không có model khả dụng</option>}
-        {!loading && models.map(m => (
-          <option
-            key={`${m.provider}|${modelId(m)}`}
-            value={`${m.provider}|${modelId(m)}`}
-            disabled={!m.available}
-          >
-            {modelLabel(m)} {!m.available ? '(Offline)' : ''}
-          </option>
-        ))}
-      </select>
-      
-      <label className="model-fallback-toggle" title="Tự động fallback khi lỗi">
-        <input
-          type="checkbox"
-          checked={allowFallback}
-          onChange={(e) => setAllowFallback(e.target.checked)}
-        />
-        Auto fallback
-      </label>
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="2"
+            d="M12 6V4m0 16v-2m6-6h2M4 12h2m10.95-4.95l1.414-1.414M5.636 18.364l1.414-1.414m0-9.9L5.636 5.636m12.728 12.728l-1.414-1.414"
+          />
+        </svg>
+      </button>
+
+      {optionsOpen && (
+        <div
+          id="model-advanced-options"
+          className="model-options-panel"
+          role="dialog"
+          aria-label="Tùy chọn model"
+        >
+          <div className="model-options-panel-title">Tùy chọn</div>
+          <label className="model-fallback-toggle" htmlFor="allow-model-fallback">
+            <input
+              id="allow-model-fallback"
+              type="checkbox"
+              checked={allowFallback}
+              onChange={(e) => setAllowFallback(e.target.checked)}
+            />
+            <span>
+              <strong>Auto fallback</strong>
+              <small>Tự chuyển sang model dự phòng khi provider chính lỗi.</small>
+            </span>
+          </label>
+        </div>
+      )}
     </div>
   );
 }

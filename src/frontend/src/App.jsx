@@ -28,6 +28,10 @@ import {
   generateId,
   clearLocalChatCache,
 } from './utils/storage.js';
+import {
+  deriveChatTitleFromFirstUserMessage,
+  shouldGenerateSessionTitle,
+} from './utils/chatTitle.js';
 
 export default function App() {
   // ── State ──────────────────────────────────────────────
@@ -39,7 +43,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState({
     state: CONNECTION_STATES.CHECKING,
-    message: 'Đang kiểm tra kết nối backend...',
+    message: 'Đang chờ kết nối',
     health: null,
     reason: null,
   });
@@ -102,7 +106,7 @@ export default function App() {
         return {
           ...prev,
           state: reason === 'startup' ? CONNECTION_STATES.CHECKING : CONNECTION_STATES.RECOVERING,
-          message: reason === 'startup' ? 'Đang kiểm tra kết nối backend...' : 'Đang kết nối lại backend...',
+          message: 'Đang chờ kết nối',
         };
       });
 
@@ -351,17 +355,15 @@ export default function App() {
       requestInFlight.current = true;
 
       let currentSessionId = activeSessionId;
+      let generatedSessionTitle = null;
 
       // Create a new session if none is active
       if (!currentSessionId) {
         currentSessionId = generateId();
-        const title =
-          trimmedMessage.length > 40
-            ? trimmedMessage.substring(0, 40) + '...'
-            : trimmedMessage;
+        generatedSessionTitle = deriveChatTitleFromFirstUserMessage(trimmedMessage);
         const newSession = {
           id: currentSessionId,
-          title,
+          title: generatedSessionTitle,
           createdAt: Date.now(),
           updatedAt: Date.now(),
           hidden: false,
@@ -369,6 +371,11 @@ export default function App() {
         };
         setSessions((prev) => [newSession, ...prev]);
         setActiveSessionId(currentSessionId);
+      } else {
+        const currentSession = sessions.find((s) => s.id === currentSessionId);
+        if (currentSession && shouldGenerateSessionTitle(currentSession.title, currentSession.messages)) {
+          generatedSessionTitle = deriveChatTitleFromFirstUserMessage(trimmedMessage);
+        }
       }
 
       // Add user message to session
@@ -376,7 +383,11 @@ export default function App() {
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id === currentSessionId) {
-            return { ...s, messages: [...s.messages, userMsgObj], updatedAt: Date.now() };
+            const title =
+              generatedSessionTitle && shouldGenerateSessionTitle(s.title, s.messages)
+                ? generatedSessionTitle
+                : s.title;
+            return { ...s, title, messages: [...s.messages, userMsgObj], updatedAt: Date.now() };
           }
           return s;
         })
@@ -415,6 +426,14 @@ export default function App() {
           setActiveSessionId(responseSessionId);
         }
 
+        if (backendOnline && generatedSessionTitle) {
+          try {
+            await apiRenameSession(responseSessionId, generatedSessionTitle);
+          } catch (err) {
+            console.warn('Failed to sync generated session title:', err);
+          }
+        }
+
         // Add assistant message
         const assistantMsgObj = { role: 'assistant', content: data.answer, data };
         setSessions((prev) =>
@@ -451,7 +470,7 @@ export default function App() {
         requestInFlight.current = false;
       }
     },
-    [activeSessionId, sessions, isLoading]
+    [activeSessionId, sessions, isLoading, backendOnline]
   );
 
   const handleSubmit = useCallback(async (text, modelConfig) => {
@@ -480,9 +499,9 @@ export default function App() {
         onHideAllSessions={handleHideAllSessions}
         onShowHistory={handleShowHistory}
         onDeleteAllSessions={handleDeleteAllSessions}
+        onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
       />
       <ChatWindow
-        activeSession={activeSession}
         chatHistory={chatHistory}
         isLoading={isLoading || loadingMessages}
         error={error}

@@ -1,33 +1,21 @@
+import { useId, useState } from 'react';
 import { formatText } from '../utils/markdown.js';
 import { responseBadgeLabel, sourceDisplayLabels } from '../utils/presentationMetadata.js';
 import DebugPanel from './DebugPanel.jsx';
 
 export default function ChatMessage({ msg }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailPanelId = useId();
   const isUser = msg.role === 'user';
   const data = msg.data || null;
   const sourceLabels = sourceDisplayLabels(data);
+  const graphFacts = Array.isArray(data?.graph_facts) ? data.graph_facts : [];
+  const hasMetadata = Boolean(data?.metadata && Object.keys(data.metadata).length > 0);
+  const hasAnswerDetails = Boolean(data && (sourceLabels.length > 0 || hasMetadata || graphFacts.length > 0));
 
   return (
-    <div className="chat-message">
+    <div className={`chat-message ${isUser ? 'chat-message-user' : 'chat-message-assistant'}`}>
       <div className="chat-message-inner">
-        {/* Avatar */}
-        <div className="chat-avatar-wrapper">
-          {isUser ? (
-            <div className="chat-avatar chat-avatar-user">U</div>
-          ) : (
-            <div className="chat-avatar chat-avatar-assistant">
-              <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M13 10V3L4 14h7v7l9-11h-7z"
-                />
-              </svg>
-            </div>
-          )}
-        </div>
-
         {/* Content */}
         <div className="chat-message-content">
           {isUser ? (
@@ -64,39 +52,62 @@ export default function ChatMessage({ msg }) {
                     </div>
                   )}
 
-                  {/* Graph Facts / Debug */}
-                  <DebugPanel graphFacts={data.graph_facts} />
+                  {hasAnswerDetails && (
+                    <div className="answer-details">
+                      <button
+                        type="button"
+                        className="answer-details-toggle"
+                        aria-expanded={detailsOpen}
+                        aria-controls={detailPanelId}
+                        onClick={() => setDetailsOpen((open) => !open)}
+                      >
+                        <span>Chi tiết</span>
+                        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth="2"
+                            d={detailsOpen ? 'M5 15l7-7 7 7' : 'M19 9l-7 7-7-7'}
+                          />
+                        </svg>
+                      </button>
 
-                  {/* Sources & Metadata */}
-                  <div className="chat-meta-row">
-                    {sourceLabels.length > 0 && (
-                      <div className="chat-meta-sources">
-                        <span className="chat-meta-label">Nguồn: </span>
-                        {sourceLabels.join(', ')}
-                      </div>
-                    )}
-                    {data.metadata && (
-                      <div className="chat-meta-info">
-                        <span title="Mô hình ngôn ngữ">
-                          {responseBadgeLabel(data.metadata)}
-                        </span>
-                        <span title="Phương pháp truy xuất">🔍 {data.metadata.retrieval}</span>
-                        {data.metadata.guardrail === 'out_of_domain' && (
-                          <span className="guardrail-badge guardrail-out" title="Ngoài phạm vi hỗ trợ">
-                            Ngoài lề
-                          </span>
-                        )}
-                        {data.metadata.guardrail === 'partial_out_of_domain' && (
-                          <span
-                            className="guardrail-badge guardrail-partial"
-                            title="Đã lọc một phần ngoài lề"
-                          >
-                            Lọc ngoài lề
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                      {detailsOpen && (
+                        <div id={detailPanelId} className="answer-details-panel">
+                          {sourceLabels.length > 0 && (
+                            <div className="chat-meta-sources">
+                              <span className="chat-meta-label">Nguồn: </span>
+                              {sourceLabels.join(', ')}
+                            </div>
+                          )}
+                          {hasMetadata && (
+                            <div className="chat-meta-info">
+                              <span title="Mô hình ngôn ngữ">
+                                {responseBadgeLabel(data.metadata)}
+                              </span>
+                              {data.metadata.retrieval && (
+                                <span title="Phương pháp truy xuất">🔍 {data.metadata.retrieval}</span>
+                              )}
+                              {data.metadata.guardrail === 'out_of_domain' && (
+                                <span className="guardrail-badge guardrail-out" title="Ngoài phạm vi hỗ trợ">
+                                  Ngoài lề
+                                </span>
+                              )}
+                              {data.metadata.guardrail === 'partial_out_of_domain' && (
+                                <span
+                                  className="guardrail-badge guardrail-partial"
+                                  title="Đã lọc một phần ngoài lề"
+                                >
+                                  Lọc ngoài lề
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          <DebugPanel graphFacts={graphFacts} />
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

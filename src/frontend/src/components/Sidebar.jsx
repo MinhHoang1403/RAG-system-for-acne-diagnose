@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 
+const PENDING_CONNECTION_STATES = new Set(['checking', 'recovering']);
+
+function compactConnectionLabel(connectionState) {
+  if (connectionState === 'connected') return 'Đang hoạt động';
+  if (connectionState === 'degraded') return 'Kết nối hạn chế';
+  return 'Đang chờ kết nối';
+}
+
 export default function Sidebar({
   sessions,
   activeSessionId,
@@ -16,6 +24,7 @@ export default function Sidebar({
   onHideAllSessions,
   onShowHistory,
   onDeleteAllSessions,
+  onToggleSidebar,
 }) {
   const [menuOpenForId, setMenuOpenForId] = useState(null);
   const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
@@ -26,10 +35,12 @@ export default function Sidebar({
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const hasVisibleStoredSessions = sessions.some((s) => !s.hidden);
   const connectionState = connectionStatus?.state || (backendOnline ? 'connected' : 'disconnected');
-  const showConnectionBanner = connectionState !== 'connected';
+  const isConnectionPending = PENDING_CONNECTION_STATES.has(connectionState);
+  const showConnectionBanner = connectionState !== 'connected' && !isConnectionPending;
   const connectionBannerClass = `sidebar-offline-banner sidebar-offline-banner-${connectionState}`;
+  const compactStatusLabel = compactConnectionLabel(connectionState);
   const connectionMessage =
-    connectionStatus?.message ||
+    (isConnectionPending ? compactStatusLabel : connectionStatus?.message) ||
     (backendOnline
       ? 'Backend đã kết nối.'
       : 'Đang dùng lịch sử cục bộ vì chưa kết nối backend.');
@@ -80,16 +91,35 @@ export default function Sidebar({
   };
 
   return (
-    <div className={`sidebar ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
+    <aside className={`sidebar ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`} aria-label="Lịch sử chat">
       {/* App Title & Subtitle */}
       <div className="sidebar-header">
-        <h1 className="sidebar-title">Acne Advisor AI</h1>
-        <p className="sidebar-subtitle">Thông tin tham khảo, không thay thế bác sĩ da liễu</p>
+        <div className="sidebar-brand-row">
+          <div className="sidebar-brand-copy">
+            <h1 className="sidebar-title">Acne Advisor</h1>
+          </div>
+          <button
+            type="button"
+            className="sidebar-inline-toggle-btn"
+            onClick={onToggleSidebar}
+            aria-label="Ẩn thanh lịch sử chat"
+            title="Ẩn lịch sử chat"
+          >
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M4 6h16M4 12h16M4 18h16"
+              />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* New chat button */}
       <div className="sidebar-new-chat">
-        <button className="new-chat-btn" onClick={onNewChat}>
+        <button className="new-chat-btn" onClick={onNewChat} type="button">
           <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
           </svg>
@@ -111,6 +141,7 @@ export default function Sidebar({
               }}
               aria-haspopup="menu"
               aria-expanded={historyMenuOpen}
+              aria-label="Mở tùy chọn lịch sử chat"
               title="Tùy chọn lịch sử chat"
             >
               <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -164,6 +195,7 @@ export default function Sidebar({
                 className={`session-item ${activeSessionId === session.id ? 'session-item-active' : ''}`}
                 onClick={() => onSelectSession(session.id)}
                 title={session.title}
+                aria-current={activeSessionId === session.id ? 'page' : undefined}
               >
                 {session.title}
               </button>
@@ -178,6 +210,9 @@ export default function Sidebar({
                   setMenuOpenForId(menuOpenForId === session.id ? null : session.id);
                 }}
                 title="Tùy chọn"
+                aria-label={`Tùy chọn cho ${session.title}`}
+                aria-haspopup="menu"
+                aria-expanded={menuOpenForId === session.id}
               >
                 <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path
@@ -249,6 +284,10 @@ export default function Sidebar({
           )}
         </div>
       )}
-    </div>
+      <div className="sidebar-footer">
+        <span className={`sidebar-footer-dot sidebar-footer-dot-${connectionState}`} />
+        <span>{compactStatusLabel}</span>
+      </div>
+    </aside>
   );
 }
