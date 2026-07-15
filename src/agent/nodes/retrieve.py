@@ -8,9 +8,12 @@ import logging
 
 import asyncio
 import os
+import re
 from src.agent.llm.provider import generate_llm_response
 from src.agent.state import ClinicalState
 from src.database.retriever import HybridRetriever
+from src.knowledge import DrugEntityNormalizer
+from src.quality.vietnamese_text import build_matching_views
 from src.resilience.budget import DeadlineBudget
 from src.resilience.contracts import RuntimeResilienceSettings, runtime_resilience_settings_from_env
 from src.resilience.exceptions import RuntimeResilienceError, StageTimeoutError
@@ -67,6 +70,10 @@ async def rewrite_question_node(state: ClinicalState) -> dict:
         "tretinoin",
         "tazarotene",
         "trifarotene",
+        "tazorac",
+        "differin",
+        "epiduo",
+        "dalacin",
     ]
     if any(entity in normalized for entity in explicit_primary_entities):
         return {
@@ -91,6 +98,18 @@ async def rewrite_question_node(state: ClinicalState) -> dict:
                     "routine",
                 ]
             ),
+        }
+
+    deterministic_rewrite = _deterministic_followup_rewrite(
+        normalized=normalized,
+        original_question=state.get("user_question", ""),
+        history=history,
+    )
+    if deterministic_rewrite:
+        logger.info("Rewrote follow-up question with deterministic coreference resolver.")
+        return {
+            "standalone_question": deterministic_rewrite,
+            "use_history_context": True,
         }
         
     logger.info("Question contains ambiguous keywords, attempting rewrite based on history.")
@@ -140,6 +159,121 @@ Câu hỏi độc lập:
             "standalone_question": normalized,
             "use_history_context": True,
         }
+
+
+def _deterministic_followup_rewrite(
+    *,
+    normalized: str,
+    original_question: str,
+    history: list[dict],
+) -> str | None:
+    """Resolve common acne-drug coreference before falling back to LLM rewrite."""
+
+    _, question_norm = build_matching_views(original_question or normalized)
+    if not _has_coreference_marker(question_norm):
+        return None
+
+    product = _last_product_mention(history)
+    if _contains_any(question_norm, ["hoat chat thu hai", "thanh phan thu hai"]):
+        ingredient = _ingredient_for_product(product, position=2)
+        if ingredient:
+            return _rewrite_for_intent(question_norm, ingredient, product)
+
+    target = _last_active_ingredient_mention(history)
+    if not target and product:
+        ingredient = _ingredient_for_product(product, position=1)
+        if ingredient and _contains_any(question_norm, ["thuoc nhom", "nhom nao", "nhom gi", "thuoc gi"]):
+            target = f"{product}/{ingredient}"
+        else:
+            target = product
+
+    if not target:
+        return None
+    return _rewrite_for_intent(question_norm, target, product)
+
+
+def _has_coreference_marker(text: str) -> bool:
+    return _contains_any(
+        text,
+        [
+            " no ",
+            " no?",
+            "thuoc do",
+            "loai do",
+            "cai do",
+            "hoat chat do",
+            "hoat chat thu hai",
+            "thanh phan thu hai",
+            "vay",
+            "vay thi",
+        ],
+    )
+
+
+def _rewrite_for_intent(question_norm: str, target: str, product: str | None) -> str:
+    product_text = f" trong {product}" if product and product not in target else ""
+    if _contains_any(question_norm, ["khang sinh khong", "co phai khang sinh", "antibiotic"]):
+        return f"{target}{product_text} có phải kháng sinh không?"
+    if _contains_any(question_norm, ["thuoc nhom", "nhom nao", "nhom gi"]):
+        return f"{target} thuộc nhóm thuốc nào?"
+    if _contains_any(question_norm, ["tai sao", "vi sao", "why", "how"]) and _contains_any(
+        question_norm,
+        ["khang khuan", "antimicrobial", "vi khuan", "c. acnes"],
+    ):
+        return f"Vì sao {target}{product_text} có tác dụng kháng khuẩn/antimicrobial với C. acnes?"
+    return f"{target}{product_text}: {question_norm}"
+
+
+def _last_product_mention(history: list[dict]) -> str | None:
+    for message in reversed(history[-8:]):
+        _, text = build_matching_views(str(message.get("content") or ""))
+        for product in ["Epiduo", "Tazorac", "Differin", "Dalacin T"]:
+            _, product_norm = build_matching_views(product)
+            if product_norm in text:
+                return product
+    return None
+
+
+def _last_active_ingredient_mention(history: list[dict]) -> str | None:
+    aliases = [
+        ("benzoyl peroxide", ["benzoyl peroxide", "bpo", "bp"]),
+        ("adapalene", ["adapalene", "adapalen"]),
+        ("tazarotene", ["tazarotene", "tazaroten"]),
+        ("clindamycin", ["clindamycin"]),
+        ("isotretinoin", ["isotretinoin"]),
+        ("tretinoin", ["tretinoin"]),
+    ]
+    for message in reversed(history[-8:]):
+        _, text = build_matching_views(str(message.get("content") or ""))
+        for label, values in aliases:
+            if any(re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", f" {text} ") for alias in values):
+                return label
+    return None
+
+
+def _ingredient_for_product(product: str | None, *, position: int) -> str | None:
+    if not product:
+        return None
+    try:
+        matches = DrugEntityNormalizer().normalize_mention(product)
+    except Exception:
+        matches = []
+    if not matches:
+        return None
+    ingredients = list(matches[0].active_ingredients or [])
+    index = position - 1
+    if index < 0 or index >= len(ingredients):
+        return None
+    return _display_ingredient(ingredients[index])
+
+
+def _display_ingredient(value: str) -> str:
+    return str(value or "").replace("_", " ")
+
+
+def _contains_any(text: str, needles: list[str]) -> bool:
+    padded = f" {text} "
+    return any(needle in padded for needle in needles)
 
 
 async def extract_symptoms_node(state: ClinicalState) -> dict:

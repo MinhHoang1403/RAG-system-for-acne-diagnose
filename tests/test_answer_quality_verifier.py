@@ -211,11 +211,13 @@ def test_requested_table_columns_are_verified_generically():
         answer=(
             "| Thuốc | Đường dùng | Ưu điểm | Lưu ý an toàn |\n"
             "|---|---|---|---|\n"
-            "| Benzoyl peroxide | Bôi | Không phải kháng sinh, hỗ trợ giảm mụn viêm. | Có thể kích ứng. |"
+            "| Mụn nhẹ-trung bình: benzoyl peroxide hoặc adapalene | Bôi | Tác động lên bít tắc/C. acnes. | Có thể kích ứng; retinoid cần cẩn trọng thai kỳ. |\n"
+            "| Mụn trung bình-nặng: phối hợp điều trị bôi, cân nhắc thuốc uống khi bác sĩ đánh giá | Bôi/đường uống tùy chỉ định | Phù hợp hơn khi viêm nhiều hoặc nguy cơ sẹo. | Không tự dùng kháng sinh uống/isotretinoin. |"
         ),
     )
 
     assert "requested_table_column_missing" in [issue.code for issue in bad.issues]
+    assert "requested_table_row_missing" in [issue.code for issue in bad.issues]
     assert good.passed is True
 
 

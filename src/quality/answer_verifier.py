@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from src.agent.answer_formatting import assess_structural_quality, infer_response_profile
+from src.agent.requested_structure import canonical_column_name, parse_requested_structure
 from src.retrieval.contracts import NormalizedQuery, PackedContext, RetrievalTrace
 from src.retrieval.query_normalization import normalize_query
 from src.quality.contracts import (
@@ -477,8 +478,9 @@ def _check_acne_fulminans_urgency(query: str, answer: str, issues: list[AnswerQu
 
 
 def _check_requested_table_schema(query: str, answer: str, issues: list[AnswerQualityIssue]) -> None:
-    requested = _extract_requested_table_columns(query)
-    if not requested:
+    structure = parse_requested_structure(query)
+    requested = list(structure.required_columns)
+    if not structure.wants_table and not requested:
         return
     headers = _extract_table_headers(answer)
     if not headers:
@@ -487,7 +489,7 @@ def _check_requested_table_schema(query: str, answer: str, issues: list[AnswerQu
                 "requested_table_missing",
                 ERROR,
                 "User requested a table with specific dimensions, but answer has no parseable Markdown table.",
-                evidence={"requested_columns": requested},
+                evidence={"requested_columns": requested, "requested_rows": list(structure.required_rows)},
             )
         )
         return
@@ -507,23 +509,76 @@ def _check_requested_table_schema(query: str, answer: str, issues: list[AnswerQu
             )
         )
 
+    if structure.exact_column_count and len(headers) != structure.exact_column_count:
+        issues.append(
+            _issue(
+                "requested_table_column_count_mismatch",
+                ERROR,
+                "Answer table does not preserve the exact number of columns requested by the user.",
+                evidence={"expected": structure.exact_column_count, "actual": len(headers), "headers": headers},
+            )
+        )
+
+    body_text = _extract_table_body_text(answer)
+    missing_rows = [
+        row
+        for row in structure.required_rows
+        if not _row_matches_table_body(row, body_text)
+    ]
+    if missing_rows:
+        issues.append(
+            _issue(
+                "requested_table_row_missing",
+                ERROR,
+                "Answer table is missing one or more user-requested entities/items.",
+                evidence={"missing_rows": missing_rows},
+            )
+        )
+
+    if missing and any(_column_matches_header(column, body_text) for column in missing):
+        issues.append(
+            _issue(
+                "requested_table_orientation_inverted",
+                ERROR,
+                "Answer appears to place requested columns as row labels instead of table headers.",
+                evidence={"missing_columns": missing, "headers": headers},
+            )
+        )
+
 
 def _check_irrelevant_topical_warning(query: str, answer: str, issues: list[AnswerQualityIssue]) -> None:
-    asks_oral_isotretinoin = "isotretinoin" in query and _contains_any(query, ["duong uong", "uong", "oral"])
+    asks_oral_isotretinoin = "isotretinoin" in query and (
+        _contains_any(query, ["duong uong", "uong", "oral", "lieu", "xet nghiem", "lipid", "gan", "tam than"])
+        or not _contains_any(query, ["boi", "thuoc boi", "topical"])
+    )
+    asks_non_topical_safety = asks_oral_isotretinoin or _contains_any(
+        query,
+        [
+            "bo qua huong dan",
+            "ignore instructions",
+            "ke lieu",
+            "ke cho toi lieu",
+            "tu uong",
+            "uống",
+            "can nang",
+            "xet nghiem",
+            "thai ky",
+        ],
+    )
     topical_context = _contains_any(query, ["boi", "thuoc boi"]) or any(
         _contains_entity_alias(query, alias)
-        for alias in ["adapalene", "benzoyl peroxide", "clindamycin", "tretinoin", "tazarotene"]
+        for alias in ["adapalene", "benzoyl peroxide", "clindamycin", "tretinoin", "tazarotene", "salicylic acid"]
     )
     topical_warning = (
-        _contains_any(answer, ["giam tan suat", "tam ngung hoat chat", "cham chich", "kich ung tai cho"])
-        and _contains_any(answer, ["boi", "hoat chat de kich ung", "tai cho", "do rat"])
+        _contains_any(answer, ["giam tan suat", "tam ngung hoat chat", "tam ngung hoat chat de kich ung", "cham chich", "kich ung tai cho"])
+        and _contains_any(answer, ["boi", "hoat chat de kich ung", "tai cho", "do rat", "kho bong"])
     )
-    if asks_oral_isotretinoin and not topical_context and topical_warning:
+    if asks_non_topical_safety and not topical_context and topical_warning:
         issues.append(
             _issue(
                 "irrelevant_topical_warning",
                 ERROR,
-                "Oral isotretinoin answer should not inject topical-irritation frequency warnings unless topical treatment is in context.",
+                "Answer injects topical-irritation frequency warnings into a non-topical safety/refusal context.",
             )
         )
 
@@ -571,6 +626,39 @@ def _check_structural_presentation(query: str, answer: str, issues: list[AnswerQ
                 ERROR if severity == "error" else WARNING,
                 str(issue_data.get("message") or "Answer violates presentation contract."),
                 evidence=issue_data.get("evidence") if isinstance(issue_data.get("evidence"), dict) else {},
+            )
+        )
+
+    structure = parse_requested_structure(query)
+    answer_norm = _norm(answer)
+    if structure.semantic_intent == "signs_symptoms" and _contains_any(
+        answer_norm,
+        ["do thoi quen", "thoi quen", "an do ngot", "stress", "thuc khuya", "my pham gay bit tac", "nguyen nhan"],
+    ):
+        issues.append(
+            _issue(
+                "sign_symptom_answer_contains_causes",
+                ERROR,
+                "User asked for signs/symptoms, but the answer drifts into causes or behaviors.",
+            )
+        )
+    if structure.exact_item_count:
+        item_count = _count_markdown_items(answer)
+        if item_count and item_count != structure.exact_item_count:
+            issues.append(
+                _issue(
+                    "requested_item_count_mismatch",
+                    ERROR,
+                    "Answer does not preserve the exact number of list items requested by the user.",
+                    evidence={"expected": structure.exact_item_count, "actual": item_count},
+                )
+            )
+    if "bold_headings" in structure.style_constraints and not _has_bold_or_markdown_heading(answer):
+        issues.append(
+            _issue(
+                "requested_bold_heading_missing",
+                ERROR,
+                "User requested bold headings, but the answer does not contain Markdown bold headings or headings.",
             )
         )
 
@@ -645,22 +733,7 @@ def _first_index(text: str, needles: list[str]) -> int:
 
 
 def _extract_requested_table_columns(query: str) -> list[str]:
-    normalized = _norm(query)
-    if not _contains_any(normalized, ["bang", "table"]):
-        return []
-    match = re.search(r"\bgom\b(.+)", normalized)
-    if not match:
-        return []
-    segment = re.split(r"[.?!;:]", match.group(1), maxsplit=1)[0]
-    segment = re.sub(r"\bva\b", ",", segment)
-    columns: list[str] = []
-    for raw in segment.split(","):
-        column = raw.strip(" -")
-        column = re.sub(r"\b(cac|cot|muc|dimension|dimensions)\b", " ", column)
-        column = re.sub(r"\s+", " ", column).strip()
-        if 2 <= len(column) <= 40:
-            columns.append(column)
-    return _dedupe(columns)
+    return list(parse_requested_structure(query).required_columns)
 
 
 def _extract_table_headers(answer: str) -> list[str]:
@@ -687,7 +760,7 @@ def _split_table_row(line: str) -> list[str]:
 
 
 def _column_matches_header(column: str, header: str) -> bool:
-    column = column.strip()
+    column = canonical_column_name(column.strip())
     header = header.strip()
     if column in header or header in column:
         return True
@@ -701,6 +774,43 @@ def _column_matches_header(column: str, header: str) -> bool:
         if column == canonical or column in values:
             return any(value in header for value in values)
     return False
+
+
+def _extract_table_body_text(answer: str) -> str:
+    lines = [line.strip() for line in answer.splitlines() if line.strip()]
+    body_rows: list[str] = []
+    in_table = False
+    for index in range(len(lines)):
+        if index + 1 < len(lines) and _is_table_row(lines[index]) and _is_table_separator(lines[index + 1]):
+            in_table = True
+            continue
+        if in_table and _is_table_separator(lines[index]):
+            continue
+        if in_table and _is_table_row(lines[index]):
+            body_rows.extend(_split_table_row(lines[index]))
+        elif in_table:
+            break
+    return _norm(" ".join(body_rows))
+
+
+def _row_matches_table_body(row: str, body_text: str) -> bool:
+    row_norm = _norm(row)
+    aliases = {
+        "benzoyl peroxide": ["benzoyl peroxide", "bpo", "bp"],
+        "salicylic acid": ["salicylic acid", "acid salicylic", "bha"],
+        "Epiduo": ["epiduo"],
+        "Differin": ["differin"],
+        "Tazorac": ["tazorac", "tazarotene"],
+    }.get(row, [row_norm])
+    return any(_norm(alias) in body_text for alias in aliases)
+
+
+def _count_markdown_items(answer: str) -> int:
+    return sum(1 for line in answer.splitlines() if re.match(r"^\s*(?:[-*+]|\d+[.)])\s+\S", line))
+
+
+def _has_bold_or_markdown_heading(answer: str) -> bool:
+    return bool(re.search(r"^\s*(?:#{1,4}\s+\S|\*\*[^*\n]{2,80}\*\*)", answer, flags=re.MULTILINE))
 
 
 def _dedupe(values: list[str]) -> list[str]:

@@ -326,7 +326,7 @@ def filter_graph_facts_for_prompt(
 
 async def generate_answer_node(state: ClinicalState) -> dict:
     """Generate the answer based on vector contexts and graph facts using LLM."""
-    question = state.get("user_question", "")
+    question = state.get("standalone_question") or state.get("user_question", "")
     contexts = state.get("vector_contexts", [])
     graph_facts = state.get("graph_facts", [])
     safety_flags = state.get("safety_flags", [])

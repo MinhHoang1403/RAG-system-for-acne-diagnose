@@ -65,6 +65,16 @@ test('formatText renders bold phrase with following content without raw markers'
   assert.doesNotMatch(visibleText, /\*\*/);
 });
 
+test('formatText renders requested bold headings without visible markdown markers', () => {
+  const rendered = formatText(['**Bã nhờn**', 'Nội dung.', '', '**Viêm**', 'Nội dung.'].join('\n'));
+
+  const visibleText = collectText(rendered);
+  assert.equal(collectByType(rendered, 'strong').length, 2);
+  assert.match(visibleText, /Bã nhờn/);
+  assert.match(visibleText, /Viêm/);
+  assert.doesNotMatch(visibleText, /\*\*/);
+});
+
 test('formatText renders headings, lists, code blocks, and safe external links', () => {
   const rendered = formatText(
     [
