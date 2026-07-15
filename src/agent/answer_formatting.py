@@ -18,7 +18,7 @@ ResponseProfile = Literal[
     "safe_fallback",
 ]
 
-ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v3"
+ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v4"
 
 CANONICAL_DISCLAIMER = "Thông tin mang tính tham khảo và không thay thế chẩn đoán của bác sĩ."
 LEGACY_DISCLAIMER = "Thông tin này chỉ mang tính tham khảo và không thay thế tư vấn y khoa chuyên nghiệp."
@@ -32,7 +32,7 @@ LEGACY_BOILERPLATE_HEADINGS = (
 )
 
 ANSWER_FORMATTING_CONTRACT = """\
-ANSWER PRESENTATION CONTRACT V3:
+ANSWER PRESENTATION CONTRACT V4:
 - Dùng cùng một chuẩn trình bày cho Gemini, Gemini fallback, Ollama, cache hit, guardrail, severity guard và safe fallback; provider không được quyết định format.
 - Không lặp lại hoặc dùng nguyên câu hỏi của người dùng làm tiêu đề. Bắt đầu ngay bằng câu trả lời.
 - Trả lời trực tiếp trước, sau đó mới giải thích. Chỉ bắt đầu bằng "Có." hoặc "Không." khi câu hỏi thật sự là yes/no.
@@ -40,9 +40,13 @@ ANSWER PRESENTATION CONTRACT V3:
 - Routine factual: ngắn gọn, không heading nếu chỉ hỏi định danh/thành phần; không thêm disclaimer trong thân answer khi UI đã có footer chung.
 - Routine skincare: dùng heading Markdown ngắn và bullet hành động rõ ràng; không gắn nhãn Guardrail nếu vẫn là câu hỏi in-domain.
 - Comparison: trả lời trực tiếp rồi dùng bảng Markdown GFM hoặc bullet đối chiếu; cover đủ các entity được hỏi.
+- Multi-intent: nếu câu hỏi có nhiều ý hoặc nhiều câu hỏi con, phải trả lời từng ý; không được rút toàn bộ câu hỏi về một câu định danh đơn lẻ.
+- Structured request: nếu người dùng yêu cầu bảng/cột/mục cụ thể, giữ đủ các cột hoặc mục đó trong answer.
 - Drug identity/composition: trả lời trực tiếp tên nhóm/hoạt chất, giải thích ngắn vai trò; bullet khi có nhiều hoạt chất; không mở đầu "Có." nếu câu hỏi không phải yes/no.
-- Safety/pregnancy: câu đầu nêu trực tiếp đối tượng được hỏi; wording phải ưu tiên tránh/ngừng trong thai kỳ, không để người dùng hiểu rằng có thể tự tiếp tục dùng; chỉ render một warning.
+- Safety/pregnancy: câu đầu nêu trực tiếp đối tượng được hỏi; mọi thuốc người dùng nêu phải được xử lý riêng; wording phải ưu tiên tránh/ngừng trong thai kỳ, không để người dùng hiểu rằng có thể tự tiếp tục dùng; chỉ render một warning.
+- Crisis/self-harm: ưu tiên hành động an toàn tức thời trước lời khuyên trị mụn; khuyên gọi cấp cứu/cơ sở y tế khẩn cấp nếu có nguy cơ hành động ngay và nhờ người tin cậy ở bên.
 - Urgent/severe acne: dùng heading Markdown và bullet; nêu rõ cần bác sĩ da liễu đánh giá sớm, tránh nặn/bóp, không tự dùng isotretinoin hoặc thuốc kê đơn.
+- Acne fulminans-like: không chẩn đoán chắc chắn, nhưng nêu nghi ngờ acne fulminans khi có cục/nang viêm lớn, trợt loét/vảy xuất huyết, sốt hoặc đau khớp; khuyên khám/chuyển khẩn trong ngày hoặc đánh giá trong 24 giờ.
 - Out-of-domain emergency: ngắn, trực tiếp, khuyên tìm trợ giúp y tế khẩn cấp; không dùng template mụn năm phần.
 - Không có heading rỗng, heading lặp, disclaimer lặp, cảnh báo lặp, câu ghép hỏng hoặc câu bị cắt.
 - Không đưa "Nguồn:" vào thân câu trả lời; hệ thống hiển thị nguồn riêng từ metadata.
@@ -292,6 +296,18 @@ def _deterministic_profile_answer(
             "Không tự xử trí bằng thuốc trị mụn trong lúc có dấu hiệu toàn thân hoặc dấu hiệu cấp cứu."
         )
 
+    if _is_self_harm_crisis_question(text):
+        return (
+            "Điều quan trọng nhất lúc này là an toàn của bạn, trước khi bàn tiếp về điều trị mụn.\n\n"
+            "## Việc cần làm ngay\n"
+            "- Nếu bạn thấy mình có thể tự làm hại bản thân hoặc không an toàn khi ở một mình, hãy gọi cấp cứu hoặc đến cơ sở y tế khẩn cấp ngay.\n"
+            "- Hãy liên hệ một người đáng tin cậy và nhờ họ ở bên bạn ngay lúc này; cố gắng không ở một mình khi nguy cơ tăng.\n"
+            "- Tránh rượu, chất kích thích và cất xa vật dụng có thể gây hại nếu có thể làm an toàn.\n\n"
+            "## Sau khi đã an toàn\n"
+            "- Mụn có thể ảnh hưởng mạnh đến giấc ngủ, giao tiếp và tâm lý, nên bạn cũng nên hẹn bác sĩ da liễu hoặc bác sĩ tâm lý/bác sĩ gia đình để được hỗ trợ.\n"
+            "- Tôi không thể chẩn đoán tình trạng tâm thần qua chat, nhưng ý nghĩ tự làm hại bản thân là dấu hiệu cần được hỗ trợ trực tiếp."
+        )
+
     if _is_retinoid_shared_class_question(text):
         return (
             "Có. Các hoạt chất này đều thuộc nhóm retinoid, nhưng khác đường dùng và bối cảnh chỉ định.\n\n"
@@ -303,7 +319,10 @@ def _deterministic_profile_answer(
             "Vì vậy, không nên kết luận chúng “hoàn toàn khác nhóm”; điểm khác quan trọng là dạng dùng, mức độ cần theo dõi và chỉ định lâm sàng."
         )
 
-    if "mang thai" in text or "co thai" in text or "co bau" in text:
+    if _is_pregnancy_context(text):
+        pregnancy_entities = _mentioned_treatment_entities(text)
+        if len(pregnancy_entities) >= 2:
+            return _pregnancy_multi_entity_answer(pregnancy_entities)
         if "adapalene" in text or "adapalen" in text or "retinoid" in text:
             return (
                 "Nên tránh hoặc ngừng dùng adapalene trong thai kỳ và trao đổi với bác sĩ da liễu hoặc bác sĩ sản khoa.\n\n"
@@ -315,6 +334,18 @@ def _deterministic_profile_answer(
                 "- Khi bạn cần chọn thuốc trị mụn trong thai kỳ.\n"
                 "- Khi mụn viêm nhiều, đau, lan rộng hoặc có nguy cơ để lại sẹo."
             )
+
+    if _is_acne_fulminans_like_question(text):
+        return (
+            "Mô tả này gợi ý tình trạng mụn rất nặng, có thể nghi acne fulminans, nhưng không thể chẩn đoán chắc chắn qua chat.\n\n"
+            "## Mức độ khẩn cấp\n"
+            "- Cần được bác sĩ da liễu hoặc cơ sở y tế đánh giá khẩn trong ngày.\n"
+            "- Nếu có sốt, đau khớp, tổn thương trợt loét hoặc vảy xuất huyết, nên được đánh giá trong vòng 24 giờ.\n"
+            "- Không tự nặn, cạy, dùng isotretinoin, kháng sinh uống hoặc thuốc kê đơn khi chưa được bác sĩ chỉ định.\n\n"
+            "## Khi chờ đi khám\n"
+            "- Giữ vùng da sạch nhẹ nhàng, tránh chà xát và theo dõi sốt/đau tăng nhanh.\n"
+            "- Mang theo danh sách thuốc/sản phẩm đang dùng để bác sĩ đánh giá."
+        )
 
     if _is_severe_acne_question(text):
         return (
@@ -376,6 +407,15 @@ def _deterministic_profile_answer(
             "| Differin | Adapalene | Adapalene là retinoid bôi, giúp điều hòa sừng hóa nang lông, giảm bít tắc/nhân mụn và hỗ trợ chống viêm. |\n"
             "| Epiduo | Adapalene + benzoyl peroxide | Có cùng adapalene như Differin, thêm benzoyl peroxide để hỗ trợ tác dụng kháng khuẩn/antimicrobial với C. acnes và tiêu sừng nhẹ. |\n\n"
             "Benzoyl peroxide không phải kháng sinh; khi phối hợp trong sản phẩm như Epiduo, nó bổ sung cơ chế tác động khác với adapalene."
+        )
+
+    if _is_antibiotic_monotherapy_and_bp_role_question(text):
+        return (
+            "Không nên dùng clindamycin bôi hoặc kháng sinh uống đơn độc/kéo dài để điều trị mụn nếu chưa có bác sĩ đánh giá.\n\n"
+            "- Clindamycin bôi là kháng sinh bôi; dùng đơn trị liệu hoặc kéo dài có thể làm tăng nguy cơ kháng kháng sinh.\n"
+            "- Kháng sinh uống cũng không nên dùng đơn độc hoặc kéo dài tùy tiện; thường cần bác sĩ kê đơn, theo dõi và phối hợp với điều trị bôi phù hợp.\n"
+            "- Benzoyl peroxide không phải kháng sinh. Khi phối hợp với kháng sinh trị mụn, benzoyl peroxide giúp tăng hiệu quả và giảm nguy cơ kháng kháng sinh.\n\n"
+            "Vì vậy, trọng tâm không phải chỉ là “có dùng kháng sinh hay không”, mà là tránh đơn trị liệu/kéo dài và dùng phối hợp đúng chỉ định."
         )
 
     if "epiduo" in text and any(marker in text for marker in ["gom", "hoat chat", "thanh phan", "moi hoat chat"]):
@@ -581,6 +621,8 @@ def _has_incomplete_terminal_sentence(text: str) -> bool:
     last = clean.splitlines()[-1].strip()
     if _is_heading(last):
         return True
+    if _is_table_row(last):
+        return False
     folded = _fold(last)
     dangling_endings = (
         " va",
@@ -688,6 +730,7 @@ def _is_high_safety_question(text: str) -> bool:
             "mang thai",
             "co thai",
             "co bau",
+            "dang co thai",
             "cho con bu",
             "isotretinoin",
             "mun sau",
@@ -695,13 +738,154 @@ def _is_high_safety_question(text: str) -> bool:
             "de lai seo",
             "dau nhieu",
             "sot",
+            "tu lam hai",
+            "tu hai",
+            "self harm",
         ]
     )
 
 
+_TREATMENT_ENTITY_RULES: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
+    (
+        "adapalene",
+        "Adapalene",
+        ("adapalene", "adapalen", "differin"),
+        "retinoid bôi; nên tránh hoặc ngừng trong thai kỳ trừ khi bác sĩ da liễu/sản khoa đánh giá trực tiếp.",
+    ),
+    (
+        "tazarotene",
+        "Tazarotene",
+        ("tazarotene", "tazaroten", "tazorac"),
+        "retinoid bôi nguy cơ cao hơn trong thai kỳ; không nên tự tiếp tục dùng khi đang có thai.",
+    ),
+    (
+        "tretinoin",
+        "Tretinoin",
+        ("tretinoin",),
+        "retinoid bôi; cần tránh tự dùng trong thai kỳ và hỏi bác sĩ về lựa chọn thay thế.",
+    ),
+    (
+        "isotretinoin",
+        "Isotretinoin",
+        ("isotretinoin",),
+        "retinoid đường uống nguy cơ cao; không được tự dùng khi đang hoặc có thể mang thai và cần bác sĩ quản lý nguy cơ.",
+    ),
+    (
+        "doxycycline",
+        "Doxycycline",
+        ("doxycycline", "doxycyclin"),
+        "kháng sinh uống nhóm tetracycline; không tự tiếp tục dùng trong thai kỳ nếu chưa được bác sĩ sản khoa/da liễu xác nhận.",
+    ),
+    (
+        "clindamycin",
+        "Clindamycin",
+        ("clindamycin", "dalacin"),
+        "kháng sinh bôi; cần bác sĩ đánh giá khi đang mang thai, đặc biệt nếu đang phối hợp nhiều thuốc trị mụn.",
+    ),
+    (
+        "benzoyl_peroxide",
+        "Benzoyl peroxide",
+        ("benzoyl peroxide", "benzoyl peroxid", "bpo", "bp"),
+        "hoạt chất bôi không phải kháng sinh; vẫn nên hỏi bác sĩ khi đang mang thai nếu cần dùng thuốc trị mụn.",
+    ),
+)
+
+
+def _mentioned_treatment_entities(text: str) -> list[tuple[str, str, str]]:
+    found: list[tuple[str, str, str]] = []
+    for key, label, aliases, pregnancy_note in _TREATMENT_ENTITY_RULES:
+        if any(_contains_entity_alias(text, alias) for alias in aliases):
+            found.append((key, label, pregnancy_note))
+    return found
+
+
+def _contains_entity_alias(text: str, alias: str) -> bool:
+    alias = _fold(alias)
+    if not alias:
+        return False
+    return re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", _fold(text)) is not None
+
+
+def _pregnancy_multi_entity_answer(entities: list[tuple[str, str, str]]) -> str:
+    rows = "\n".join(f"- {label}: {note}" for _, label, note in entities)
+    return (
+        "Trong thai kỳ, bạn không nên tự tiếp tục dùng các thuốc trị mụn đã nêu; hãy liên hệ bác sĩ sản khoa hoặc bác sĩ da liễu càng sớm càng tốt để được hướng dẫn cụ thể.\n\n"
+        "## Với từng thuốc\n"
+        f"{rows}\n\n"
+        "## Việc nên làm ngay\n"
+        "- Không tự tăng liều, đổi thuốc hoặc dùng tiếp theo đơn cũ khi chưa được bác sĩ xác nhận.\n"
+        "- Ghi lại tên thuốc, dạng dùng, nồng độ/liều nếu có và thời điểm đã dùng để trao đổi với bác sĩ.\n"
+        "- Trong lúc chờ tư vấn, ưu tiên chăm sóc nền dịu nhẹ như rửa mặt nhẹ, dưỡng ẩm phù hợp và chống nắng."
+    )
+
+
+def _is_pregnancy_context(text: str) -> bool:
+    folded = _fold(text)
+    return any(
+        marker in folded
+        for marker in [
+            "mang thai",
+            "co thai",
+            "dang co thai",
+            "co bau",
+            "dang bau",
+            "thai ky",
+            "pregnancy",
+            "pregnant",
+        ]
+    )
+
+
+def _is_self_harm_crisis_question(text: str) -> bool:
+    folded = _fold(text)
+    self_harm = any(
+        marker in folded
+        for marker in [
+            "tu lam hai",
+            "tu hai",
+            "lam hai ban than",
+            "hai ban than",
+            "self harm",
+            "suicide",
+            "tu sat",
+        ]
+    )
+    distress = any(marker in folded for marker in ["mat ngu", "ne tranh", "tuyet vong", "tram cam", "lo au"])
+    return self_harm and (distress or "mun" in folded or "acne" in folded)
+
+
+def _is_acne_fulminans_like_question(text: str) -> bool:
+    folded = _fold(text)
+    severe_lesions = any(marker in folded for marker in ["cuc", "nang viem", "mun nang", "mun cuc"])
+    erosive = any(marker in folded for marker in ["trot loet", "loet", "vay xuat huyet", "dong vay xuat huyet"])
+    systemic = any(marker in folded for marker in ["sot", "dau khop", "dot ngot"])
+    return severe_lesions and erosive and systemic
+
+
+def _is_antibiotic_monotherapy_and_bp_role_question(text: str) -> bool:
+    folded = _fold(text)
+    topical_antibiotic = any(marker in folded for marker in ["clindamycin", "erythromycin", "khang sinh boi"])
+    oral_antibiotic = any(
+        marker in folded
+        for marker in [
+            "khang sinh uong",
+            "khang sinh duong uong",
+            "oral antibiotic",
+            "doxycycline",
+            "lymecycline",
+            "minocycline",
+            "sarecycline",
+        ]
+    )
+    monotherapy_or_long = any(marker in folded for marker in ["don doc", "don tri lieu", "monotherapy", "keo dai"])
+    bp_role = "benzoyl peroxide" in folded and any(marker in folded for marker in ["phoi hop", "vai tro", "ket hop"])
+    return bp_role and monotherapy_or_long and (topical_antibiotic or oral_antibiotic)
+
+
 def _is_severe_acne_question(text: str) -> bool:
-    return any(marker in text for marker in ["mun cuc", "mun sau", "cuc mun sau", "de lai seo", "nguy co seo"]) and any(
-        marker in text for marker in ["dau", "sung", "do", "viem"]
+    folded = _fold(text)
+    return any(marker in folded for marker in ["mun cuc", "mun sau", "cuc mun sau", "de lai seo", "nguy co seo"]) and any(
+        marker in folded for marker in ["dau", "sung", "do", "viem"]
     )
 
 

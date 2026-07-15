@@ -122,7 +122,26 @@ def _infer_intent(normalized_text: str, metadata: dict[str, Any]) -> str:
         ["tac dung phu", "tác dụng phụ", "kich ung", "kích ứng", "kho da", "khô da", "do da", "đỏ da"],
     ):
         return "side_effect"
-    if _contains_any(normalized_text, ["mang thai", "thai ky", "thai kỳ", "cho con bu", "cho con bú"]) and not _has_negated_pregnancy_context(normalized_text):
+    if _contains_any(
+        normalized_text,
+        [
+            "mang thai",
+            "dang mang thai",
+            "đang mang thai",
+            "co thai",
+            "có thai",
+            "dang co thai",
+            "đang có thai",
+            "co bau",
+            "có bầu",
+            "dang bau",
+            "đang bầu",
+            "thai ky",
+            "thai kỳ",
+            "cho con bu",
+            "cho con bú",
+        ],
+    ) and not _has_negated_pregnancy_context(normalized_text):
         return "safety"
     if _contains_any(
         normalized_text,

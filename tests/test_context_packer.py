@@ -227,6 +227,59 @@ def test_comparison_context_keeps_all_primary_entity_cards():
     assert "drug_product:epiduo" in selected_entity_ids
 
 
+def test_safety_context_keeps_all_named_medication_entity_cards():
+    normalized = normalize_query(
+        "Tôi đang có thai và hiện dùng adapalene, tazarotene và doxycycline để trị mụn. Tôi nên làm gì?"
+    )
+    candidates = [
+        _chunk(
+            f"chunk:pregnancy-{index}",
+            f"General pregnancy safety evidence {index}.",
+            safety_context=["pregnancy"],
+            query_intent_hint=["safety"],
+        )
+        for index in range(4)
+    ]
+    candidates.extend(
+        [
+            _entity(
+                "active_ingredient:adapalene",
+                "adapalene",
+                "active_ingredient",
+                drug_class=["topical_retinoid"],
+                safety_contexts=["pregnancy"],
+            ),
+            _entity(
+                "active_ingredient:tazarotene",
+                "tazarotene",
+                "active_ingredient",
+                drug_class=["topical_retinoid"],
+                safety_contexts=["pregnancy"],
+            ),
+            _entity(
+                "active_ingredient:doxycycline",
+                "doxycycline",
+                "active_ingredient",
+                drug_class=["oral_antibiotic"],
+                safety_contexts=["pregnancy"],
+            ),
+        ]
+    )
+
+    packed = pack_context(normalized, candidates, max_items=3)
+    selected_entity_ids = set(packed.debug["pack_trace"]["selected_entity_ids"])
+
+    assert normalized.intent == "safety"
+    assert selected_entity_ids == {
+        "active_ingredient:adapalene",
+        "active_ingredient:tazarotene",
+        "active_ingredient:doxycycline",
+    }
+    assert "adapalene" in packed.context_text
+    assert "tazarotene" in packed.context_text
+    assert "doxycycline" in packed.context_text
+
+
 def test_pack_context_drops_near_duplicate_long_text_but_keeps_safety_evidence():
     normalized = normalize_query("Retinoid có dùng khi mang thai không?")
     duplicate_text = "Retinoids require pregnancy safety counseling and contraception. " * 8

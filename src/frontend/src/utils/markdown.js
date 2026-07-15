@@ -18,11 +18,25 @@ function isSafeLinkHref(href) {
   return /^https?:\/\//i.test(href);
 }
 
+function renderItalic(text, keyPrefix) {
+  const parts = String(text).split(/(\*[^*\n]+\*)/g).filter((part) => part !== '');
+  return parts.map((part, index) => {
+    if (part.startsWith('*') && part.endsWith('*') && part.length > 2) {
+      return React.createElement('em', { key: `${keyPrefix}-em-${index}` }, part.slice(1, -1));
+    }
+    return part;
+  });
+}
+
 function renderInline(text, keyPrefix) {
-  const parts = String(text).split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g).filter((part) => part !== '');
+  const parts = String(text).split(/(\*\*.+?\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g).filter((part) => part !== '');
   return parts.map((part, index) => {
     if (part.startsWith('**') && part.endsWith('**')) {
-      return React.createElement('strong', { key: `${keyPrefix}-strong-${index}` }, part.slice(2, -2));
+      return React.createElement(
+        'strong',
+        { key: `${keyPrefix}-strong-${index}` },
+        renderItalic(part.slice(2, -2), `${keyPrefix}-strong-${index}`),
+      );
     }
     if (part.startsWith('`') && part.endsWith('`')) {
       return React.createElement('code', { key: `${keyPrefix}-code-${index}`, className: 'chat-inline-code' }, part.slice(1, -1));
@@ -44,7 +58,7 @@ function renderInline(text, keyPrefix) {
         linkMatch[1],
       );
     }
-    return part;
+    return renderItalic(part, `${keyPrefix}-text-${index}`);
   });
 }
 
@@ -118,7 +132,7 @@ function renderParagraph(line, key) {
     return React.createElement(
       'p',
       { key, className: 'chat-bold-paragraph' },
-      React.createElement('strong', null, line.slice(2, -2)),
+      React.createElement('strong', null, renderItalic(line.slice(2, -2), `${key}-bold-paragraph`)),
     );
   }
   return React.createElement('p', { key, className: 'chat-paragraph' }, renderInline(line, key));

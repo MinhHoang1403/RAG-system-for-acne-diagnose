@@ -117,3 +117,13 @@ def test_negated_pregnancy_context_does_not_keep_safety_intent():
     corrected = normalize_query("Tôi nói nhầm, tôi không mang thai, chỉ có da nhạy cảm.")
     assert corrected.intent != "safety"
     assert "pregnancy" not in corrected.safety_context
+
+
+def test_multi_medication_pregnancy_query_is_safety_and_keeps_all_entities():
+    query = normalize_query(
+        "Tôi đang có thai và hiện dùng adapalene, tazarotene và doxycycline để trị mụn. Tôi nên làm gì?"
+    )
+
+    assert query.intent == "safety"
+    assert {"adapalene", "tazarotene", "doxycycline"}.issubset(query.active_ingredient)
+    assert {"topical_retinoid", "oral_antibiotic"}.issubset(query.drug_class)
