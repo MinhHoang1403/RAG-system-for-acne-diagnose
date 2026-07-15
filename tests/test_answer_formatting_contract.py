@@ -27,13 +27,14 @@ def test_formatting_contract_avoids_mandatory_boilerplate_sections():
         graph_facts=[],
     )
 
-    assert ANSWER_FORMATTING_CONTRACT_VERSION == "answer_formatting_contract_v5"
+    assert ANSWER_FORMATTING_CONTRACT_VERSION == "answer_formatting_contract_v6"
     assert ANSWER_FORMATTING_CONTRACT in prompt
-    assert "ANSWER PRESENTATION CONTRACT V5" in prompt
+    assert "ANSWER PRESENTATION CONTRACT V6" in prompt
     assert "provider không được quyết định format" in prompt
     assert "Multi-intent" in prompt
     assert "Structured request" in prompt
     assert "Signs/symptoms vs causes" in prompt
+    assert "Emergency immediate action" in prompt
     assert "3-5 đoạn ngắn gồm tóm tắt" not in prompt
     assert "Mục **Lưu ý** phải có câu" not in prompt
 

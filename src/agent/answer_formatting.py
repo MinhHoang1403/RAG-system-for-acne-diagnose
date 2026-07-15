@@ -6,6 +6,11 @@ import re
 import unicodedata
 from typing import Any, Literal
 
+from src.agent.emergency_contract import (
+    build_anaphylaxis_like_emergency_answer,
+    build_generic_emergency_answer,
+    is_anaphylaxis_like_emergency_query,
+)
 from src.agent.requested_structure import parse_requested_structure
 
 
@@ -20,7 +25,7 @@ ResponseProfile = Literal[
     "safe_fallback",
 ]
 
-ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v5"
+ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v6"
 
 CANONICAL_DISCLAIMER = "Thông tin mang tính tham khảo và không thay thế chẩn đoán của bác sĩ."
 LEGACY_DISCLAIMER = "Thông tin này chỉ mang tính tham khảo và không thay thế tư vấn y khoa chuyên nghiệp."
@@ -34,7 +39,7 @@ LEGACY_BOILERPLATE_HEADINGS = (
 )
 
 ANSWER_FORMATTING_CONTRACT = """\
-ANSWER PRESENTATION CONTRACT V5:
+ANSWER PRESENTATION CONTRACT V6:
 - Dùng cùng một chuẩn trình bày cho Gemini, Gemini fallback, Ollama, cache hit, guardrail, severity guard và safe fallback; provider không được quyết định format.
 - Không lặp lại hoặc dùng nguyên câu hỏi của người dùng làm tiêu đề. Bắt đầu ngay bằng câu trả lời.
 - Trả lời trực tiếp trước, sau đó mới giải thích. Chỉ bắt đầu bằng "Có." hoặc "Không." khi câu hỏi thật sự là yes/no.
@@ -45,6 +50,8 @@ ANSWER PRESENTATION CONTRACT V5:
 - Multi-intent: nếu câu hỏi có nhiều ý hoặc nhiều câu hỏi con, phải trả lời từng ý; không được rút toàn bộ câu hỏi về một câu định danh đơn lẻ.
 - Structured request: nếu người dùng yêu cầu bảng/cột/mục cụ thể, giữ đúng cấu trúc đó; không đảo cột thành hàng hoặc bỏ entity/item đã nêu.
 - Signs/symptoms vs causes: nếu người dùng hỏi dấu hiệu/triệu chứng/biểu hiện, chỉ liệt kê dấu hiệu quan sát được; không thay bằng nguyên nhân, thói quen hoặc yếu tố làm nặng.
+- Exact-count signs/symptoms: nếu người dùng yêu cầu đúng N dấu hiệu/triệu chứng/biểu hiện, trả đúng N bullet dấu hiệu quan sát được; không thêm danh sách xử trí dài thứ hai.
+- Emergency immediate action: nếu có khó thở kèm sưng quanh mắt/môi/mặt/họng hoặc phát ban sau thuốc/sản phẩm, câu đầu phải khuyên gọi cấp cứu/đi cấp cứu ngay; không dùng wording yếu như "có thể cần", "nên cân nhắc", "theo dõi thêm" hoặc chờ 24-48 giờ.
 - Markdown style request: nếu người dùng yêu cầu tiêu đề đậm/in đậm/bold, dùng Markdown hợp lệ như **Tiêu đề**; frontend sẽ render, không được né instruction này.
 - Drug identity/composition: trả lời trực tiếp tên nhóm/hoạt chất, giải thích ngắn vai trò; bullet khi có nhiều hoạt chất; không mở đầu "Có." nếu câu hỏi không phải yes/no.
 - Safety/pregnancy: câu đầu nêu trực tiếp đối tượng được hỏi; mọi thuốc người dùng nêu phải được xử lý riêng; wording phải ưu tiên tránh/ngừng trong thai kỳ, không để người dùng hiểu rằng có thể tự tiếp tục dùng; chỉ render một warning.
@@ -89,7 +96,8 @@ def answer_format_instruction_for_question(question: str) -> str:
         )
     if structure.semantic_intent == "signs_symptoms":
         structure_hints.append(
-            "Người dùng hỏi dấu hiệu/triệu chứng: chỉ nêu biểu hiện quan sát được, không thay bằng nguyên nhân/thói quen."
+            "Người dùng hỏi dấu hiệu/triệu chứng: chỉ nêu biểu hiện quan sát được, không thay bằng nguyên nhân/thói quen. "
+            "Nếu có yêu cầu đúng N dấu hiệu/triệu chứng/biểu hiện, trả đúng N bullet và không thêm danh sách xử trí dài thứ hai."
         )
     if "bold_headings" in structure.style_constraints:
         structure_hints.append(
@@ -198,6 +206,7 @@ def finalize_answer_presentation(
     draft = _normalize_common_surface_errors(draft)
     draft = normalize_answer_markdown(draft, disclaimer=CANONICAL_DISCLAIMER)
     draft = _remove_legacy_boilerplate_headings(draft, profile)
+    draft = _repair_requested_structure_answer(draft, user_question)
     draft = _dedupe_exact_paragraphs(draft)
     draft = _trim_incomplete_terminal_paragraph(draft)
     draft = normalize_answer_markdown(draft, disclaimer=CANONICAL_DISCLAIMER)
@@ -335,14 +344,12 @@ def _deterministic_profile_answer(
         if "dau nguc" in text and "kho tho" in text:
             return (
                 "Đau ngực kèm khó thở không phải biểu hiện điển hình của mụn. "
-                "Bạn nên tìm trợ giúp y tế khẩn cấp/cấp cứu nếu triệu chứng đang xảy ra hoặc nặng lên.\n\n"
+                "Bạn cần gọi cấp cứu hoặc đến cơ sở cấp cứu ngay nếu triệu chứng đang xảy ra hoặc nặng lên.\n\n"
                 "Không tự quy triệu chứng này cho mụn hoặc tự điều trị bằng thuốc trị mụn."
             )
-        return (
-            "Triệu chứng bạn mô tả có thể cần được đánh giá y tế khẩn cấp, đặc biệt nếu đang khó thở, "
-            "choáng, sưng môi/mặt/họng, sốt cao, đau dữ dội hoặc triệu chứng nặng lên.\n\n"
-            "Không tự xử trí bằng thuốc trị mụn trong lúc có dấu hiệu toàn thân hoặc dấu hiệu cấp cứu."
-        )
+        if is_anaphylaxis_like_emergency_query(user_question):
+            return build_anaphylaxis_like_emergency_answer()
+        return build_generic_emergency_answer()
 
     if _is_self_harm_crisis_question(text):
         return (
@@ -566,6 +573,62 @@ def _structured_requested_answer(text: str, structure: Any) -> str | None:
         )
 
     return None
+
+
+def _repair_requested_structure_answer(answer: str, user_question: str) -> str:
+    structure = parse_requested_structure(user_question)
+    if (
+        structure.semantic_intent == "signs_symptoms"
+        and structure.exact_item_count
+        and _sign_symptom_exact_count_needs_repair(answer, structure.exact_item_count)
+    ):
+        return _signs_symptoms_list(structure.exact_item_count, _fold(user_question))
+    return answer
+
+
+def _sign_symptom_exact_count_needs_repair(answer: str, expected_count: int) -> bool:
+    item_count = _count_markdown_items(answer)
+    if item_count != expected_count:
+        return True
+    folded = _fold(answer)
+    if _has_sign_symptom_forbidden_cause_terms(folded):
+        return True
+    return _has_second_management_list(folded)
+
+
+def _has_sign_symptom_forbidden_cause_terms(folded_answer: str) -> bool:
+    return any(
+        marker in folded_answer
+        for marker in (
+            "thoi quen",
+            "nguyen nhan",
+            "thuc khuya",
+            "an do ngot",
+            "stress",
+            "my pham gay bit tac",
+            "boi qua day",
+            "boi qua nhieu",
+            "doi san pham lien tuc",
+            "khong duong am",
+        )
+    )
+
+
+def _has_second_management_list(folded_answer: str) -> bool:
+    return any(
+        marker in folded_answer
+        for marker in (
+            "viec nen lam",
+            "cach xu ly",
+            "xu tri",
+            "khi nao nen gap bac si",
+            "khi nao can gap bac si",
+        )
+    )
+
+
+def _count_markdown_items(text: str) -> int:
+    return len(re.findall(r"(?m)^\s*(?:[-*•]|\d+[.)])\s+", text or ""))
 
 
 def _treatment_summary_table(structure: Any) -> str:

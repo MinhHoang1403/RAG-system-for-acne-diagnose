@@ -644,7 +644,7 @@ def _check_structural_presentation(query: str, answer: str, issues: list[AnswerQ
         )
     if structure.exact_item_count:
         item_count = _count_markdown_items(answer)
-        if item_count and item_count != structure.exact_item_count:
+        if item_count != structure.exact_item_count:
             issues.append(
                 _issue(
                     "requested_item_count_mismatch",

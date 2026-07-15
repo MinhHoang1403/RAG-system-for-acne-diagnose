@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 
 from src.agent.answer_formatting import answer_format_instruction_for_question, finalize_answer_presentation
+from src.agent.emergency_contract import (
+    first_sentence_has_immediate_emergency_action,
+    first_sentence_has_weak_emergency_action,
+)
 from src.agent.nodes import reason as reason_node
+from src.agent.nodes.respond import finalize_response_node
 from src.agent.nodes.retrieve import rewrite_question_node
 from src.agent.requested_structure import parse_requested_structure
 from src.quality.answer_verifier import verify_answer_quality
@@ -148,6 +153,102 @@ def test_isotretinoin_neurologic_symptom_combo_is_emergency_first():
     assert "không nên chờ 24-48 giờ" in guarded.answer
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Sau khi bôi thuốc trị mụn, mắt tôi sưng và tôi bắt đầu khó thở.",
+        "Sau khi bôi kem trị mụn, môi tôi sưng và tôi khó thở.",
+        "Tôi vừa dùng thuốc trị mụn rồi bị sưng mặt, nghẹn họng và khó thở.",
+    ],
+)
+def test_anaphylaxis_like_emergency_requires_immediate_action_first(query: str):
+    classification = classify_medical_severity(query)
+    guarded = apply_severity_aware_answer_guard(query, "Bạn có thể theo dõi thêm.")
+    answer = finalize_answer_presentation(
+        "Routine trị mụn nên dưỡng ẩm và theo dõi thêm.",
+        user_question=query,
+        severity=classification.severity,
+    )
+
+    assert classification.severity == "emergency"
+    assert "emergency_anaphylaxis_like_reaction" in classification.matched_rules
+    assert first_sentence_has_immediate_emergency_action(guarded.answer)
+    assert first_sentence_has_immediate_emergency_action(answer)
+    assert not first_sentence_has_weak_emergency_action(guarded.answer)
+    assert not first_sentence_has_weak_emergency_action(answer)
+    assert "24-48 giờ" not in guarded.answer
+    assert "theo dõi thêm" not in answer.split("\n\n", 1)[0]
+    emergency_action_pos = answer.find("gọi cấp cứu")
+    routine_pos = answer.lower().find("routine")
+    assert emergency_action_pos >= 0
+    assert routine_pos == -1 or emergency_action_pos < routine_pos
+
+
+@pytest.mark.parametrize(
+    "query, expected_count",
+    [
+        ("Liệt kê đúng 4 dấu hiệu routine trị mụn đang gây kích ứng quá mức.", 4),
+        ("Nêu đúng 4 biểu hiện cho thấy da đang bị kích ứng bởi treatment.", 4),
+        ("Cho tôi 3 triệu chứng cho thấy sản phẩm trị mụn quá mạnh với da.", 3),
+    ],
+)
+def test_exact_count_sign_requests_return_observable_signs_only(query: str, expected_count: int):
+    bad_draft = (
+        "- Thức khuya.\n"
+        "- Ăn đồ ngọt.\n"
+        "- Stress.\n"
+        "- Mỹ phẩm gây bít tắc.\n\n"
+        "## Việc nên làm\n"
+        "- Đổi sản phẩm liên tục.\n"
+        "- Bôi thêm nhiều hoạt chất."
+    )
+
+    answer = finalize_answer_presentation(bad_draft, user_question=query)
+    report = verify_answer_quality(query=query, answer=answer)
+    folded = answer.lower()
+
+    assert _markdown_item_count(answer) == expected_count
+    assert "đỏ rát" in folded or "khô căng" in folded or "châm chích" in folded
+    assert "thức khuya" not in folded
+    assert "ăn đồ ngọt" not in folded
+    assert "stress" not in folded
+    assert "mỹ phẩm gây bít tắc" not in folded
+    assert "## Việc nên làm" not in answer
+    assert report.passed is True
+
+
+def test_habit_count_request_is_not_overcorrected_to_signs():
+    query = "Liệt kê 4 thói quen khiến routine trị mụn dễ gây kích ứng."
+    answer = (
+        "- Bôi quá nhiều treatment cùng lúc.\n"
+        "- Tăng tần suất quá nhanh.\n"
+        "- Không dưỡng ẩm khi da khô căng.\n"
+        "- Chà xát hoặc tẩy da chết quá mạnh."
+    )
+    report = verify_answer_quality(query=query, answer=answer)
+
+    assert parse_requested_structure(query).semantic_intent == "causes_behaviors"
+    assert "sign_symptom_answer_contains_causes" not in {issue.code for issue in report.issues}
+    assert report.passed is True
+
+
+@pytest.mark.asyncio
+async def test_finalize_response_live_path_repairs_cached_exact_sign_drift():
+    result = await finalize_response_node(
+        {
+            "user_question": "Liệt kê đúng 4 dấu hiệu routine trị mụn đang gây kích ứng quá mức.",
+            "cached_answer": "- Thức khuya.\n- Ăn đồ ngọt.\n- Stress.\n- Mỹ phẩm gây bít tắc.",
+            "cache_hit": True,
+            "is_in_domain": True,
+        }
+    )
+
+    answer = result["final_answer"]
+    assert _markdown_item_count(answer) == 4
+    assert "Thức khuya" not in answer
+    assert "Đỏ rát" in answer
+
+
 @pytest.mark.asyncio
 async def test_coreference_rewrite_resolves_second_epiduo_ingredient_to_bpo():
     result = await rewrite_question_node(
@@ -229,3 +330,7 @@ async def test_generation_prompt_uses_standalone_question_after_rewrite(monkeypa
 
     assert "Câu hỏi hiện tại của người dùng: benzoyl peroxide trong Epiduo có phải kháng sinh không?" in captured["prompt"]
     assert "Câu hỏi hiện tại của người dùng: Hoạt chất thứ hai" not in captured["prompt"]
+
+
+def _markdown_item_count(answer: str) -> int:
+    return sum(1 for line in answer.splitlines() if line.lstrip().startswith(("-", "*", "•")))
