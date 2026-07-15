@@ -38,41 +38,46 @@ export default function ChatInput({ message, setMessage, isLoading, onSubmit }) 
     <div className="chat-input-wrapper">
       <div className="chat-input-container">
         <form onSubmit={handleFormSubmit} className="chat-input-form">
-          <textarea
-            ref={textareaRef}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={isLoading ? "Đang xử lý câu hỏi hiện tại..." : "Hỏi về tình trạng mụn của bạn..."}
-            disabled={isLoading}
-            className={`chat-textarea ${isOverLimit ? 'chat-textarea-error' : ''}`}
-            rows="1"
-          />
-          <div className={`chat-char-counter ${isOverLimit ? 'chat-char-counter-error' : ''}`}>
-            {message.length} / {MAX_MESSAGE_CHARS}
+          <div className="chat-input-actions chat-composer-row">
+            <textarea
+              ref={textareaRef}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={isLoading ? "Đang xử lý câu hỏi hiện tại..." : "Hỏi về tình trạng mụn của bạn..."}
+              aria-label="Nhập câu hỏi về tình trạng mụn"
+              disabled={isLoading}
+              className={`chat-textarea ${isOverLimit ? 'chat-textarea-error' : ''}`}
+              rows="1"
+            />
+            <ModelSelector onModelConfigChange={setModelConfig} />
+            <div className="chat-input-right-actions">
+              <div className={`chat-char-counter ${isOverLimit ? 'chat-char-counter-error' : ''}`}>
+                {message.length} / {MAX_MESSAGE_CHARS}
+              </div>
+              <button
+                type="submit"
+                disabled={isLoading || isInvalid}
+                className={`chat-send-btn ${!isInvalid && !isLoading ? 'chat-send-btn-active' : ''}`}
+                aria-label="Gửi câu hỏi"
+                title="Gửi câu hỏi"
+              >
+                <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M5 10l7-7m0 0l7 7m-7-7v18"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
           {isOverLimit && (
             <div className="chat-input-error-msg">
               Câu hỏi hơi dài. Vui lòng rút gọn dưới 500 ký tự hoặc tách thành nhiều câu nhỏ.
             </div>
           )}
-          <div className="chat-input-actions">
-            <ModelSelector onModelConfigChange={setModelConfig} />
-            <button
-              type="submit"
-              disabled={isLoading || isInvalid}
-              className={`chat-send-btn ${!isInvalid && !isLoading ? 'chat-send-btn-active' : ''}`}
-            >
-              <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M5 10l7-7m0 0l7 7m-7-7v18"
-                />
-              </svg>
-            </button>
-          </div>
         </form>
         <div className="chat-input-disclaimer">
           Acne Advisor AI chỉ cung cấp thông tin tham khảo, không thay thế tư vấn y khoa chuyên nghiệp.

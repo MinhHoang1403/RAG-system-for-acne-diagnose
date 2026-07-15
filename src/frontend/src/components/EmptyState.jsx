@@ -1,18 +1,23 @@
 const SUGGESTED_QUESTIONS = [
   {
-    title: 'Tư vấn mụn theo triệu chứng',
-    text: 'Mô tả loại mụn, vị trí và mức độ — hệ thống sẽ gợi ý hướng chăm sóc phù hợp.',
+    title: 'Tư vấn theo triệu chứng',
+    text: 'Mô tả loại mụn, vị trí và mức độ.',
     prompt: 'Tôi muốn được tư vấn mụn theo triệu chứng. Tôi nên mô tả những thông tin nào?',
   },
   {
     title: 'Tra cứu hoạt chất trị mụn',
-    text: 'Tìm hiểu benzoyl peroxide, retinoid, kháng sinh, isotretinoin và các lưu ý an toàn.',
+    text: 'Tìm hiểu công dụng và lưu ý an toàn.',
     prompt: 'Tôi muốn tìm hiểu các hoạt chất trị mụn phổ biến và lưu ý an toàn.',
   },
   {
-    title: 'Cảnh báo khi cần đi khám',
-    text: 'Nhận biết dấu hiệu nguy hiểm như sưng đau nhiều, sốt, khó thở hoặc phản ứng thuốc.',
+    title: 'Khi nào cần đi khám',
+    text: 'Nhận biết dấu hiệu cần gặp bác sĩ.',
     prompt: 'Khi nào tình trạng mụn hoặc phản ứng thuốc cần đi khám bác sĩ?',
+  },
+  {
+    title: 'So sánh thuốc/routine',
+    text: 'Đối chiếu vai trò, tác dụng phụ và lưu ý.',
+    prompt: 'Adapalene và benzoyl peroxide khác nhau thế nào?',
   },
 ];
 
@@ -29,7 +34,10 @@ export default function EmptyState({ onSendQuestion }) {
           />
         </svg>
       </div>
-      <h2 className="empty-state-title">Tôi có thể giúp gì cho tình trạng mụn của bạn?</h2>
+      <h2 className="empty-state-title">Tôi có thể tư vấn gì liên quan đến mụn cho bạn?</h2>
+      <p className="empty-state-description">
+        Hỏi về triệu chứng, hoạt chất, routine hoặc dấu hiệu cần đi khám.
+      </p>
       <div className="empty-state-suggestions">
         {SUGGESTED_QUESTIONS.map((q, i) => (
           <button key={i} className="suggestion-btn" onClick={() => onSendQuestion(q.prompt)}>

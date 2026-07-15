@@ -4,8 +4,8 @@ import EmptyState from './EmptyState.jsx';
 import ChatInput from './ChatInput.jsx';
 
 export default function ChatWindow({
-  activeSession,
   chatHistory,
+  sidebarOpen = true,
   isLoading,
   error,
   message,
@@ -25,12 +25,13 @@ export default function ChatWindow({
 
   return (
     <div className="chat-window">
-      {/* Header */}
-      <header className="chat-header">
+      {!sidebarOpen && (
         <button
-          className="sidebar-toggle-btn"
+          className="sidebar-reopen-btn"
           onClick={onToggleSidebar}
-          title="Ẩn/Hiện lịch sử"
+          title="Mở lịch sử chat"
+          aria-label="Mở thanh lịch sử chat"
+          type="button"
         >
           <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path
@@ -41,13 +42,10 @@ export default function ChatWindow({
             />
           </svg>
         </button>
-        <div className="chat-header-title">
-          <h1>{activeSession ? activeSession.title : 'Đoạn chat mới'}</h1>
-        </div>
-      </header>
+      )}
 
       {/* Chat Scrollable Area */}
-      <div className="chat-scroll-area">
+      <div className={`chat-scroll-area ${chatHistory.length === 0 ? 'chat-scroll-area-empty' : ''}`}>
         {chatHistory.length === 0 ? (
           <EmptyState onSendQuestion={onSendQuestion} />
         ) : (
@@ -58,27 +56,8 @@ export default function ChatWindow({
 
             {/* Loading indicator */}
             {isLoading && (
-              <div className="chat-message">
+              <div className="chat-message chat-message-assistant">
                 <div className="chat-message-inner">
-                  <div className="chat-avatar-wrapper">
-                    <div className="chat-avatar chat-avatar-assistant">
-                      <svg
-                        width="20"
-                        height="20"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        className="loading-pulse"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M13 10V3L4 14h7v7l9-11h-7z"
-                        />
-                      </svg>
-                    </div>
-                  </div>
                   <div className="chat-message-content loading-dots-wrapper">
                     <div className="loading-dots">
                       <div className="loading-dot" />
@@ -92,9 +71,8 @@ export default function ChatWindow({
 
             {/* Error message */}
             {error && (
-              <div className="chat-message">
+              <div className="chat-message chat-message-assistant">
                 <div className="chat-message-inner">
-                  <div style={{ width: '32px', flexShrink: 0 }} />
                   <div className="chat-error">
                     <svg
                       width="20"
