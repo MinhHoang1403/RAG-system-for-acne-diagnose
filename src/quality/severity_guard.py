@@ -6,6 +6,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.agent.emergency_contract import (
+    build_anaphylaxis_like_emergency_answer,
+    build_generic_emergency_answer,
+    is_anaphylaxis_like_emergency_query,
+)
 from src.quality.vietnamese_text import build_matching_views
 
 
@@ -31,17 +36,8 @@ class SeverityGuardResult(BaseModel):
     cache_eligible: bool = True
 
 
-EMERGENCY_TEMPLATE = (
-    "**Tóm tắt ngắn**\n"
-    "Bạn nên gọi cấp cứu hoặc đến cơ sở y tế khẩn cấp ngay nếu các triệu chứng này đang xảy ra hoặc tăng nhanh. "
-    "Các dấu hiệu cần chú ý gồm khó thở, "
-    "sưng môi/mặt/họng, phát ban lan nhanh, sốt cao, đau dữ dội, phồng rộp hoặc bong tróc da.\n\n"
-    "**Việc nên làm ngay**\n"
-    "Ngưng thuốc/sản phẩm nghi gây phản ứng nếu vừa dùng, không bôi hoặc thử thêm hoạt chất mới, "
-    "và mang theo thuốc/sản phẩm đã dùng khi đi khám.\n\n"
-    "**Lưu ý**\n"
-    "Tôi không thể chẩn đoán chắc chắn qua chat. Thông tin này chỉ nhằm định hướng an toàn và không thay thế cấp cứu hoặc khám trực tiếp."
-)
+EMERGENCY_TEMPLATE = build_generic_emergency_answer()
+ANAPHYLAXIS_LIKE_EMERGENCY_TEMPLATE = build_anaphylaxis_like_emergency_answer()
 
 ISOTRETINOIN_NEURO_EMERGENCY_TEMPLATE = (
     "**Tóm tắt ngắn**\n"
@@ -132,6 +128,10 @@ def classify_medical_severity(query: str) -> SeverityClassification:
         evidence.extend(item for item in items if item)
 
     # Emergency: airway/allergy, severe drug rash, systemic infection/necrosis.
+    if is_anaphylaxis_like_emergency_query(query):
+        mark("emergency_anaphylaxis_like_reaction", "khó thở kèm sưng/phát ban")
+        return SeverityClassification(severity="emergency", matched_rules=rules, evidence=evidence)
+
     if _has_any(accentless, ["kho tho", "tho gap", "tuc nguc"]) and _has_any(
         accentless,
         ["sung moi", "sung mat", "sung hong", "sung luoi", "me day", "phat ban"],
@@ -275,6 +275,8 @@ def apply_severity_aware_answer_guard(query: str, answer: str) -> SeverityGuardR
         template = (
             ISOTRETINOIN_NEURO_EMERGENCY_TEMPLATE
             if "emergency_isotretinoin_neurologic_symptoms" in classification.matched_rules
+            else ANAPHYLAXIS_LIKE_EMERGENCY_TEMPLATE
+            if "emergency_anaphylaxis_like_reaction" in classification.matched_rules
             else EMERGENCY_TEMPLATE
         )
         return SeverityGuardResult(
@@ -412,6 +414,7 @@ def _answer_already_has_relevant_caution(answer_accentless: str, template: str) 
 
 __all__ = [
     "CAUTION_TEMPLATE",
+    "ANAPHYLAXIS_LIKE_EMERGENCY_TEMPLATE",
     "EMERGENCY_TEMPLATE",
     "ISOTRETINOIN_PREGNANCY_URGENT_NOTE",
     "ISOTRETINOIN_NEURO_EMERGENCY_TEMPLATE",

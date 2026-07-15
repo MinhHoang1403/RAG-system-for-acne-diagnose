@@ -195,8 +195,8 @@ def _extract_required_rows(text: str) -> list[str]:
 
 def _extract_exact_item_count(text: str) -> int | None:
     patterns = [
-        r"(?:liet ke|nêu|neu|dua ra|cho toi|cho tôi)\s+(?:dung\s+)?(?P<count>\d+|mot|hai|ba|bon|tu|nam|sau|bay|tam|chin|muoi)\s+(?:dau hieu|trieu chung|y|muc|bullet|nguyen nhan|thoi quen)",
-        r"(?:dung\s+)?(?P<count>\d+|mot|hai|ba|bon|tu|nam|sau|bay|tam|chin|muoi)\s+(?:dau hieu|trieu chung|y|muc|bullet|nguyen nhan|thoi quen)",
+        r"(?:liet ke|nêu|neu|dua ra|cho toi|cho tôi)\s+(?:dung\s+)?(?P<count>\d+|mot|hai|ba|bon|tu|nam|sau|bay|tam|chin|muoi)\s+(?:dau hieu|trieu chung|bieu hien|y|muc|bullet|nguyen nhan|thoi quen)",
+        r"(?:dung\s+)?(?P<count>\d+|mot|hai|ba|bon|tu|nam|sau|bay|tam|chin|muoi)\s+(?:dau hieu|trieu chung|bieu hien|y|muc|bullet|nguyen nhan|thoi quen)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text)
