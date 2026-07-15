@@ -46,6 +46,25 @@ test('formatText keeps provider badges and sources outside answer rendering', ()
   assert.doesNotMatch(collectText(rendered), /Gemini|Qwen|Nguồn:/);
 });
 
+test('formatText renders nested bold and italic without visible markdown markers', () => {
+  const rendered = formatText('**Vai trò của vi khuẩn *Cutibacterium acnes* (*C. acnes*):**');
+
+  const visibleText = collectText(rendered);
+  assert.equal(collectByType(rendered, 'strong').length, 1);
+  assert.equal(collectByType(rendered, 'em').length, 2);
+  assert.match(visibleText, /Cutibacterium acnes/);
+  assert.doesNotMatch(visibleText, /\*\*/);
+});
+
+test('formatText renders bold phrase with following content without raw markers', () => {
+  const rendered = formatText('- **Vai trò của Cutibacterium acnes (C. acnes):** Nội dung');
+
+  const visibleText = collectText(rendered);
+  assert.equal(collectByType(rendered, 'strong').length, 1);
+  assert.match(visibleText, /Nội dung/);
+  assert.doesNotMatch(visibleText, /\*\*/);
+});
+
 test('formatText renders headings, lists, code blocks, and safe external links', () => {
   const rendered = formatText(
     [

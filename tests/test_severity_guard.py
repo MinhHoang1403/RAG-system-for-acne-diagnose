@@ -22,6 +22,8 @@ from src.quality.severity_guard import apply_severity_aware_answer_guard, classi
         ("Mụn ở gần mắt bị sưng đỏ đau và chảy mủ", "urgent"),
         ("Tôi đang uống isotretinoin mà bị đau đầu dữ dội và nhìn mờ", "urgent"),
         ("Tôi đang mang thai, có dùng isotretinoin trị mụn được không?", "urgent"),
+        ("Mụn làm tôi mất ngủ và tôi nghĩ đến việc tự làm hại bản thân", "urgent"),
+        ("Nhiều cục và nang viêm lớn trợt loét, đóng vảy xuất huyết, kèm sốt và đau khớp", "urgent"),
         ("Sau nặn mụn có vẻ áp xe và đau nhiều", "urgent"),
         ("Em bé bị nghi nhiễm trùng da ở má", "urgent"),
         ("Da tôi bị đỏ rát nhẹ khi dùng benzoyl peroxide", "caution"),
@@ -63,6 +65,44 @@ def test_urgent_guard_adds_clinician_review_and_isotretinoin_pregnancy_warning()
     assert "bác sĩ" in result.answer
     assert "24-48" in result.answer
     assert "Isotretinoin không được tự dùng" in result.answer
+
+
+def test_self_harm_guard_prioritizes_crisis_actions_over_acne_advice():
+    result = apply_severity_aware_answer_guard(
+        query=(
+            "Mụn của tôi không quá nặng nhưng khiến tôi né tránh mọi người, mất ngủ và gần đây "
+            "tôi đã nghĩ đến việc tự làm hại bản thân. Tôi nên làm gì?"
+        ),
+        answer="Bạn nên rửa mặt dịu nhẹ và gặp bác sĩ da liễu.",
+    )
+
+    assert result.classification.severity == "urgent"
+    assert result.modified is True
+    assert result.cache_eligible is False
+    assert result.modification_reason == "severity_self_harm_crisis_preface"
+    assert result.answer.startswith("**Tóm tắt ngắn**")
+    assert "cấp cứu" in result.answer
+    assert "người đáng tin cậy" in result.answer
+    assert result.answer.index("An toàn") < result.answer.index("điều trị mụn")
+
+
+def test_acne_fulminans_guard_keeps_same_day_and_24_hour_urgency():
+    result = apply_severity_aware_answer_guard(
+        query=(
+            "Một nam thiếu niên đột ngột xuất hiện nhiều cục và nang viêm lớn, trợt loét, "
+            "đóng vảy xuất huyết, kèm sốt và đau khớp."
+        ),
+        answer="Có thể là mụn nặng.",
+    )
+
+    assert result.classification.severity == "urgent"
+    assert result.modified is True
+    assert result.cache_eligible is False
+    assert result.modification_reason == "severity_acne_fulminans_urgent_preface"
+    assert "nghi acne fulminans" in result.answer
+    assert "trong ngày" in result.answer
+    assert "24 giờ" in result.answer
+    assert "không thể chẩn đoán chắc chắn" in result.answer
 
 
 def test_caution_guard_adds_mild_irritation_safety_note():

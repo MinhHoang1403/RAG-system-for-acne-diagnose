@@ -60,6 +60,12 @@ def verify_answer_quality(
     _check_retinoid_pregnancy_safety(query_norm, answer_norm, issues, contradictions, safety_warnings)
     _check_isotretinoin_safety(answer_norm, issues, contradictions, safety_warnings)
     _check_acne_type_answer(query_norm, answer_norm, issues, required, detected)
+    _check_antibiotic_multi_intent(query_norm, answer_norm, issues, required, detected)
+    _check_multi_entity_pregnancy_coverage(query_norm, answer_norm, normalized_query, issues, required, detected)
+    _check_self_harm_crisis_response(query_norm, answer_norm, issues)
+    _check_acne_fulminans_urgency(query_norm, answer_norm, issues)
+    _check_requested_table_schema(query, answer, issues)
+    _check_irrelevant_topical_warning(query_norm, answer_norm, issues)
     _check_structural_presentation(query, answer, issues)
 
     missing = [fact for fact in _dedupe(required) if fact not in _dedupe(detected)]
@@ -328,6 +334,200 @@ def _check_acne_type_answer(query: str, answer: str, issues: list[AnswerQualityI
         issues.append(_issue("acne_type_overfocused_on_drugs", WARNING, "Acne type answer may be over-focused on named drugs."))
 
 
+def _check_antibiotic_multi_intent(
+    query: str,
+    answer: str,
+    issues: list[AnswerQualityIssue],
+    required: list[str],
+    detected: list[str],
+) -> None:
+    if not _is_antibiotic_monotherapy_and_bp_role_query(query):
+        return
+
+    required.extend(
+        [
+            "topical clindamycin monotherapy risk",
+            "oral antibiotic monotherapy or prolonged-use risk",
+            "benzoyl peroxide combination role",
+        ]
+    )
+
+    if "clindamycin" in answer and _contains_any(
+        answer,
+        ["don doc", "don tri lieu", "khang khang sinh", "khong nen dung", "khong khuyen cao"],
+    ):
+        detected.append("topical clindamycin monotherapy risk")
+
+    if _contains_any(answer, ["khang sinh uong", "khang sinh duong uong", "oral antibiotic", "doxycycline"]) and _contains_any(
+        answer,
+        ["don doc", "keo dai", "bac si", "ke don", "theo doi", "khong tu"],
+    ):
+        detected.append("oral antibiotic monotherapy or prolonged-use risk")
+
+    if "benzoyl peroxide" in answer and _contains_any(
+        answer,
+        ["phoi hop", "ket hop", "giam nguy co khang khang sinh", "khang khang sinh", "tang hieu qua"],
+    ):
+        detected.append("benzoyl peroxide combination role")
+
+    missing = [
+        fact
+        for fact in [
+            "topical clindamycin monotherapy risk",
+            "oral antibiotic monotherapy or prolonged-use risk",
+            "benzoyl peroxide combination role",
+        ]
+        if fact not in detected
+    ]
+    if missing:
+        issues.append(
+            _issue(
+                "antibiotic_multi_intent_incomplete",
+                ERROR,
+                "Answer collapses a multi-intent antibiotic question or misses a required sub-question.",
+                evidence={"missing": missing},
+            )
+        )
+
+
+_PREGNANCY_ENTITY_ALIASES: dict[str, list[str]] = {
+    "adapalene": ["adapalene", "adapalen", "differin"],
+    "tazarotene": ["tazarotene", "tazaroten", "tazorac"],
+    "tretinoin": ["tretinoin"],
+    "isotretinoin": ["isotretinoin"],
+    "doxycycline": ["doxycycline", "doxycyclin"],
+    "clindamycin": ["clindamycin", "dalacin"],
+    "benzoyl_peroxide": ["benzoyl peroxide", "benzoyl peroxid", "bpo"],
+}
+
+
+def _check_multi_entity_pregnancy_coverage(
+    query: str,
+    answer: str,
+    normalized_query: NormalizedQuery,
+    issues: list[AnswerQualityIssue],
+    required: list[str],
+    detected: list[str],
+) -> None:
+    if not _is_pregnancy_context_query(query):
+        return
+    entities = [
+        entity
+        for entity in normalized_query.active_ingredient
+        if entity in _PREGNANCY_ENTITY_ALIASES and _entity_mentioned(query, entity)
+    ]
+    if len(entities) < 2:
+        return
+
+    for entity in entities:
+        fact = f"pregnancy safety covers {entity}"
+        required.append(fact)
+        if _entity_mentioned(answer, entity):
+            detected.append(fact)
+        else:
+            issues.append(
+                _issue(
+                    "missing_safety_entity",
+                    ERROR,
+                    "Safety answer omits a medication entity mentioned by the user.",
+                    evidence={"missing_entity": entity, "expected_entities": entities},
+                )
+            )
+
+    if not _contains_any(answer, ["bac si", "da lieu", "san khoa", "doctor", "clinician", "khong tu", "ngung", "tranh"]):
+        issues.append(
+            _issue(
+                "pregnancy_action_missing",
+                ERROR,
+                "Multi-medication pregnancy answer should advise clinician review and avoid self-directed continued use.",
+            )
+        )
+
+
+def _check_self_harm_crisis_response(query: str, answer: str, issues: list[AnswerQualityIssue]) -> None:
+    if not _is_self_harm_query(query):
+        return
+
+    has_emergency_action = _contains_any(answer, ["cap cuu", "co so y te khan cap", "y te khan cap", "emergency"])
+    has_trusted_person = _contains_any(answer, ["nguoi dang tin cay", "o ben", "khong o mot minh", "khong nen o mot minh"])
+    if not has_emergency_action:
+        issues.append(_issue("self_harm_emergency_action_missing", ERROR, "Self-harm answer should mention emergency help if immediate danger is present."))
+    if not has_trusted_person:
+        issues.append(_issue("self_harm_trusted_person_missing", ERROR, "Self-harm answer should encourage contacting a trusted person and not being alone."))
+
+    crisis_index = _first_index(answer, ["an toan", "cap cuu", "khan cap", "nguoi dang tin cay"])
+    acne_index = _first_index(answer, ["tri mun", "dieu tri mun", "da lieu", "routine", "cham soc da"])
+    if acne_index >= 0 and (crisis_index < 0 or acne_index < crisis_index):
+        issues.append(_issue("self_harm_crisis_not_first", ERROR, "Self-harm answer should prioritize crisis escalation before dermatology advice."))
+    if _contains_any(answer, ["ban bi tram cam", "chan doan tram cam", "roi loan tam than"]):
+        issues.append(_issue("self_harm_diagnosis_overclaim", ERROR, "Self-harm answer should not diagnose mental health conditions via chat."))
+
+
+def _check_acne_fulminans_urgency(query: str, answer: str, issues: list[AnswerQualityIssue]) -> None:
+    if not _is_acne_fulminans_like_query(query):
+        return
+    if "acne fulminans" not in answer:
+        issues.append(_issue("acne_fulminans_not_mentioned", ERROR, "Fulminans-like query should mention suspected acne fulminans."))
+    if not _contains_any(answer, ["nghi", "co the", "khong the chan doan", "khong chan doan"]):
+        issues.append(_issue("acne_fulminans_uncertainty_missing", ERROR, "Fulminans-like answer should avoid definitive diagnosis."))
+    if not _contains_any(answer, ["trong ngay", "24 gio", "24h", "khan", "cap cuu"]):
+        issues.append(_issue("acne_fulminans_urgency_missing", ERROR, "Fulminans-like answer should preserve same-day or 24-hour urgency."))
+    if _contains_any(answer, ["chac chan la acne fulminans", "chinh la acne fulminans"]):
+        issues.append(_issue("acne_fulminans_definitive_diagnosis", ERROR, "Answer should not diagnose acne fulminans definitively via chat."))
+
+
+def _check_requested_table_schema(query: str, answer: str, issues: list[AnswerQualityIssue]) -> None:
+    requested = _extract_requested_table_columns(query)
+    if not requested:
+        return
+    headers = _extract_table_headers(answer)
+    if not headers:
+        issues.append(
+            _issue(
+                "requested_table_missing",
+                ERROR,
+                "User requested a table with specific dimensions, but answer has no parseable Markdown table.",
+                evidence={"requested_columns": requested},
+            )
+        )
+        return
+
+    missing = [
+        column
+        for column in requested
+        if not any(_column_matches_header(column, header) for header in headers)
+    ]
+    if missing:
+        issues.append(
+            _issue(
+                "requested_table_column_missing",
+                ERROR,
+                "Answer table is missing one or more user-requested columns/dimensions.",
+                evidence={"missing_columns": missing, "headers": headers},
+            )
+        )
+
+
+def _check_irrelevant_topical_warning(query: str, answer: str, issues: list[AnswerQualityIssue]) -> None:
+    asks_oral_isotretinoin = "isotretinoin" in query and _contains_any(query, ["duong uong", "uong", "oral"])
+    topical_context = _contains_any(query, ["boi", "thuoc boi"]) or any(
+        _contains_entity_alias(query, alias)
+        for alias in ["adapalene", "benzoyl peroxide", "clindamycin", "tretinoin", "tazarotene"]
+    )
+    topical_warning = (
+        _contains_any(answer, ["giam tan suat", "tam ngung hoat chat", "cham chich", "kich ung tai cho"])
+        and _contains_any(answer, ["boi", "hoat chat de kich ung", "tai cho", "do rat"])
+    )
+    if asks_oral_isotretinoin and not topical_context and topical_warning:
+        issues.append(
+            _issue(
+                "irrelevant_topical_warning",
+                ERROR,
+                "Oral isotretinoin answer should not inject topical-irritation frequency warnings unless topical treatment is in context.",
+            )
+        )
+
+
 def _issue(code: str, severity: str, message: str, evidence: dict[str, Any] | None = None, suggested_fix: str | None = None) -> AnswerQualityIssue:
     return AnswerQualityIssue(
         code=code,
@@ -383,6 +583,124 @@ def _required_fact_is_important(fact: str, intent: str | None) -> bool:
 
 def _contains_any(text: str, needles: list[str]) -> bool:
     return any(needle in text for needle in needles)
+
+
+def _is_antibiotic_monotherapy_and_bp_role_query(query: str) -> bool:
+    topical = _contains_any(query, ["clindamycin", "erythromycin", "khang sinh boi"])
+    oral = _contains_any(
+        query,
+        ["khang sinh uong", "khang sinh duong uong", "oral antibiotic", "doxycycline", "lymecycline", "minocycline"],
+    )
+    monotherapy_or_long = _contains_any(query, ["don doc", "don tri lieu", "monotherapy", "keo dai"])
+    bp_role = "benzoyl peroxide" in query and _contains_any(query, ["phoi hop", "ket hop", "vai tro"])
+    return bp_role and monotherapy_or_long and (topical or oral)
+
+
+def _is_pregnancy_context_query(query: str) -> bool:
+    return _contains_any(
+        query,
+        [
+            "mang thai",
+            "co thai",
+            "dang co thai",
+            "co bau",
+            "dang bau",
+            "thai ky",
+            "pregnancy",
+            "pregnant",
+            "cho con bu",
+        ],
+    )
+
+
+def _entity_mentioned(text: str, entity: str) -> bool:
+    aliases = _PREGNANCY_ENTITY_ALIASES.get(entity, [entity])
+    return any(_contains_entity_alias(text, alias) for alias in aliases)
+
+
+def _contains_entity_alias(text: str, alias: str) -> bool:
+    alias_norm = _norm(alias)
+    if not alias_norm:
+        return False
+    return re.search(rf"(?<![a-z0-9]){re.escape(alias_norm)}(?![a-z0-9])", text) is not None
+
+
+def _is_self_harm_query(query: str) -> bool:
+    return _contains_any(
+        query,
+        ["tu lam hai", "tu hai", "lam hai ban than", "hai ban than", "tu sat", "self harm", "suicide"],
+    )
+
+
+def _is_acne_fulminans_like_query(query: str) -> bool:
+    severe_lesions = _contains_any(query, ["cuc", "nang viem", "mun nang", "mun cuc"])
+    erosive = _contains_any(query, ["trot loet", "loet", "vay xuat huyet", "dong vay xuat huyet"])
+    systemic = _contains_any(query, ["sot", "dau khop", "dot ngot"])
+    return severe_lesions and erosive and systemic
+
+
+def _first_index(text: str, needles: list[str]) -> int:
+    positions = [text.find(needle) for needle in needles if needle in text]
+    return min(positions) if positions else -1
+
+
+def _extract_requested_table_columns(query: str) -> list[str]:
+    normalized = _norm(query)
+    if not _contains_any(normalized, ["bang", "table"]):
+        return []
+    match = re.search(r"\bgom\b(.+)", normalized)
+    if not match:
+        return []
+    segment = re.split(r"[.?!;:]", match.group(1), maxsplit=1)[0]
+    segment = re.sub(r"\bva\b", ",", segment)
+    columns: list[str] = []
+    for raw in segment.split(","):
+        column = raw.strip(" -")
+        column = re.sub(r"\b(cac|cot|muc|dimension|dimensions)\b", " ", column)
+        column = re.sub(r"\s+", " ", column).strip()
+        if 2 <= len(column) <= 40:
+            columns.append(column)
+    return _dedupe(columns)
+
+
+def _extract_table_headers(answer: str) -> list[str]:
+    lines = [line.strip() for line in answer.splitlines() if line.strip()]
+    for index in range(len(lines) - 1):
+        if _is_table_row(lines[index]) and _is_table_separator(lines[index + 1]):
+            return [_norm(cell) for cell in _split_table_row(lines[index]) if cell.strip()]
+    return []
+
+
+def _is_table_row(line: str) -> bool:
+    return line.strip().startswith("|") and line.strip().endswith("|") and line.count("|") >= 2
+
+
+def _is_table_separator(line: str) -> bool:
+    if not _is_table_row(line):
+        return False
+    cells = _split_table_row(line)
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells)
+
+
+def _split_table_row(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _column_matches_header(column: str, header: str) -> bool:
+    column = column.strip()
+    header = header.strip()
+    if column in header or header in column:
+        return True
+    synonyms = {
+        "thuoc": ["thuoc", "lua chon", "hoat chat"],
+        "duong dung": ["duong dung", "cach dung", "dang dung"],
+        "uu diem": ["uu diem", "loi ich", "diem manh"],
+        "luu y an toan": ["luu y an toan", "an toan", "luu y"],
+    }
+    for canonical, values in synonyms.items():
+        if column == canonical or column in values:
+            return any(value in header for value in values)
+    return False
 
 
 def _dedupe(values: list[str]) -> list[str]:

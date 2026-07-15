@@ -33,6 +33,10 @@ def test_medical_prompt_contains_direct_answer_and_entity_preservation_rules():
     assert "không được viết \"có, ... không nên\"" in prompt
     assert "câu trả lời phải cover đầy đủ cả a và b" in prompt
     assert "ưu tiên bảng hoặc bullet đối chiếu" in prompt
+    assert "phải trả lời từng ý hoặc từng câu hỏi con" in prompt
+    assert "phải xử lý từng thuốc người dùng nêu" in prompt
+    assert "header bảng phải giữ đủ các cột" in prompt
+    assert "ý nghĩ tự làm hại bản thân" in prompt
 
 
 def test_graph_fact_filter_removes_document_code_and_empty_fact():
@@ -170,6 +174,59 @@ async def test_finalize_clindamycin_monotherapy_polarity_is_no():
 
 
 @pytest.mark.asyncio
+async def test_finalize_antibiotic_multi_intent_does_not_collapse_to_bp_identity():
+    result = await finalize_response_node(
+        {
+            "user_question": (
+                "Vì sao không nên dùng clindamycin bôi hoặc kháng sinh uống đơn độc để điều trị mụn kéo dài? "
+                "Benzoyl peroxide có vai trò gì khi phối hợp với kháng sinh?"
+            ),
+            "draft_answer": "Không, benzoyl peroxide không phải là kháng sinh.",
+            "conversation_history": [],
+            "use_history_context": False,
+            "is_in_domain": True,
+        }
+    )
+
+    answer = result["final_answer"].lower()
+    assert answer.startswith("không nên dùng clindamycin")
+    assert "clindamycin" in answer
+    assert "kháng sinh uống" in answer
+    assert "đơn độc" in answer
+    assert "kéo dài" in answer
+    assert "kháng kháng sinh" in answer
+    assert "benzoyl peroxide" in answer
+    assert "tăng hiệu quả" in answer
+    assert not answer.startswith("không, benzoyl peroxide không phải")
+
+
+@pytest.mark.asyncio
+async def test_finalize_multi_entity_pregnancy_safety_covers_all_named_meds():
+    result = await finalize_response_node(
+        {
+            "user_question": (
+                "Tôi đang có thai và hiện dùng adapalene, tazarotene và doxycycline để trị mụn. "
+                "Tôi nên làm gì?"
+            ),
+            "draft_answer": "Nên ngừng adapalene và hỏi bác sĩ.",
+            "conversation_history": [],
+            "use_history_context": False,
+            "is_in_domain": True,
+        }
+    )
+
+    answer = result["final_answer"]
+    lowered = answer.lower()
+    assert "adapalene" in lowered
+    assert "tazarotene" in lowered
+    assert "doxycycline" in lowered
+    assert "## Với từng thuốc" in answer
+    assert "Không tự tăng liều" in answer
+    assert "bác sĩ sản khoa" in answer
+    assert "có thể tiếp tục" not in lowered
+
+
+@pytest.mark.asyncio
 async def test_finalize_adapalene_bp_comparison_covers_both_entities():
     result = await finalize_response_node(
         {
@@ -190,6 +247,51 @@ async def test_finalize_adapalene_bp_comparison_covers_both_entities():
     assert "có thể được phối hợp" in answer
     assert "bạc màu" in answer
     assert "**khi nào nên gặp bác sĩ**" not in answer
+
+
+@pytest.mark.asyncio
+async def test_finalize_self_harm_question_prioritizes_crisis_action():
+    result = await finalize_response_node(
+        {
+            "user_question": (
+                "Mụn của tôi không quá nặng nhưng khiến tôi né tránh mọi người, mất ngủ và gần đây "
+                "tôi đã nghĩ đến việc tự làm hại bản thân. Tôi nên làm gì?"
+            ),
+            "draft_answer": "Bạn nên chăm sóc da dịu nhẹ và gặp bác sĩ da liễu.",
+            "conversation_history": [],
+            "use_history_context": False,
+            "is_in_domain": True,
+        }
+    )
+
+    answer = result["final_answer"].lower()
+    assert answer.startswith("điều quan trọng nhất lúc này là an toàn")
+    assert "cấp cứu" in answer
+    assert "người đáng tin cậy" in answer
+    assert answer.index("an toàn") < answer.index("điều trị mụn")
+    assert "chẩn đoán tình trạng tâm thần" in answer
+
+
+@pytest.mark.asyncio
+async def test_finalize_acne_fulminans_like_question_keeps_urgency():
+    result = await finalize_response_node(
+        {
+            "user_question": (
+                "Một nam thiếu niên đột ngột xuất hiện nhiều cục và nang viêm lớn, trợt loét, "
+                "đóng vảy xuất huyết, kèm sốt và đau khớp. Đây có thể là tình trạng gì và cần xử trí với mức độ khẩn cấp ra sao?"
+            ),
+            "draft_answer": "Đây là mụn nặng, nên khám khi có thời gian.",
+            "conversation_history": [],
+            "use_history_context": False,
+            "is_in_domain": True,
+        }
+    )
+
+    answer = result["final_answer"].lower()
+    assert "nghi acne fulminans" in answer
+    assert "không thể chẩn đoán chắc chắn" in answer
+    assert "trong ngày" in answer
+    assert "24 giờ" in answer
 
 
 @pytest.mark.asyncio

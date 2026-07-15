@@ -193,6 +193,15 @@ def _ensure_intent_requirements(
             dropped=dropped,
             normalized_query=normalized_query,
         )
+    elif normalized_query.intent == "safety":
+        selected = _ensure_primary_entity_coverage(
+            normalized_query,
+            selected,
+            ordered,
+            seen,
+            max_items,
+            dropped,
+        )
     elif normalized_query.intent == "acne_type":
         selected = _ensure_source(
             selected,

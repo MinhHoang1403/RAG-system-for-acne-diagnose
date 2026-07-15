@@ -54,6 +54,30 @@ URGENT_TEMPLATE = (
 )
 
 
+SELF_HARM_CRISIS_TEMPLATE = (
+    "**Tóm tắt ngắn**\n"
+    "An toàn của bạn là ưu tiên trước điều trị mụn. Ý nghĩ tự làm hại bản thân là dấu hiệu cần được hỗ trợ trực tiếp, không nên ở một mình với nguy cơ này.\n\n"
+    "**Việc nên làm ngay**\n"
+    "- Nếu bạn có nguy cơ hành động ngay hoặc thấy mình không an toàn, hãy gọi cấp cứu hoặc đến cơ sở y tế khẩn cấp ngay.\n"
+    "- Hãy gọi hoặc nhắn cho một người đáng tin cậy và nhờ họ ở bên bạn ngay lúc này.\n"
+    "- Tránh rượu/chất kích thích và cất xa vật dụng có thể gây hại nếu làm được an toàn.\n\n"
+    "**Sau khi đã an toàn**\n"
+    "Bạn có thể hẹn bác sĩ da liễu để xử lý mụn và trao đổi thêm với bác sĩ tâm lý/bác sĩ gia đình về mất ngủ, né tránh giao tiếp hoặc ý nghĩ tự làm hại. Tôi không thể chẩn đoán tâm thần qua chat."
+)
+
+
+ACNE_FULMINANS_URGENT_TEMPLATE = (
+    "**Tóm tắt ngắn**\n"
+    "Mô tả này gợi ý mụn rất nặng và có thể nghi acne fulminans, nhưng không thể chẩn đoán chắc chắn qua chat.\n\n"
+    "**Mức độ khẩn cấp**\n"
+    "- Bạn nên được bác sĩ da liễu hoặc cơ sở y tế đánh giá/chuyển khẩn trong ngày.\n"
+    "- Nếu có sốt, đau khớp, tổn thương trợt loét hoặc vảy xuất huyết, nên được đánh giá trong vòng 24 giờ.\n"
+    "- Không tự dùng isotretinoin, kháng sinh uống hoặc thuốc kê đơn khi chưa được bác sĩ chỉ định.\n\n"
+    "**Trong lúc chờ khám**\n"
+    "Tránh nặn/cạy, không chà xát mạnh và mang theo danh sách thuốc/sản phẩm đang dùng khi đi khám."
+)
+
+
 ISOTRETINOIN_PREGNANCY_URGENT_NOTE = (
     "Isotretinoin không được tự dùng khi đang mang thai, chuẩn bị mang thai hoặc nghi ngờ có thai; "
     "cần bác sĩ chuyên khoa đánh giá và quản lý nguy cơ."
@@ -111,7 +135,22 @@ def classify_medical_severity(query: str) -> SeverityClassification:
         mark("emergency_high_fever_with_severe_rash", "sốt cao kèm phát ban nặng")
         return SeverityClassification(severity="emergency", matched_rules=rules, evidence=evidence)
 
+    if _has_any(
+        accentless,
+        ["tu lam hai", "tu hai", "lam hai ban than", "hai ban than", "tu sat", "self harm", "suicide"],
+    ):
+        mark("urgent_self_harm_ideation", "ý nghĩ tự làm hại bản thân")
+        return SeverityClassification(severity="urgent", matched_rules=rules, evidence=evidence)
+
     # Urgent: same-day/24-48h clinician review.
+    if (
+        _has_any(accentless, ["cuc", "nang viem", "mun nang", "mun cuc"])
+        and _has_any(accentless, ["trot loet", "loet", "vay xuat huyet", "dong vay xuat huyet"])
+        and _has_any(accentless, ["sot", "dau khop", "dot ngot"])
+    ):
+        mark("urgent_acne_fulminans_like", "mụn cục/nang trợt loét kèm sốt/đau khớp")
+        return SeverityClassification(severity="urgent", matched_rules=rules, evidence=evidence)
+
     if _has_any(accentless, ["quanh mat", "gan mat", "mi mat", "sung mi", "dau mat"]) and _has_any(
         accentless,
         ["sung", "do", "dau", "chay mu", "nhin mo"],
@@ -205,6 +244,24 @@ def apply_severity_aware_answer_guard(query: str, answer: str) -> SeverityGuardR
         )
 
     if classification.severity == "urgent":
+        if "urgent_self_harm_ideation" in classification.matched_rules:
+            return SeverityGuardResult(
+                answer=SELF_HARM_CRISIS_TEMPLATE,
+                original_answer=answer,
+                classification=classification,
+                modified=True,
+                modification_reason="severity_self_harm_crisis_preface",
+                cache_eligible=False,
+            )
+        if "urgent_acne_fulminans_like" in classification.matched_rules:
+            return SeverityGuardResult(
+                answer=ACNE_FULMINANS_URGENT_TEMPLATE,
+                original_answer=answer,
+                classification=classification,
+                modified=True,
+                modification_reason="severity_acne_fulminans_urgent_preface",
+                cache_eligible=False,
+            )
         urgent_text = URGENT_TEMPLATE
         if "urgent_pregnancy_high_risk_acne_medication" in classification.matched_rules:
             urgent_text += "\n\n" + ISOTRETINOIN_PREGNANCY_URGENT_NOTE
