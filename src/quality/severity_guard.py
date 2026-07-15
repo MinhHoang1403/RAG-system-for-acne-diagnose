@@ -33,14 +33,25 @@ class SeverityGuardResult(BaseModel):
 
 EMERGENCY_TEMPLATE = (
     "**Tóm tắt ngắn**\n"
-    "Dựa trên mô tả của bạn, đây có thể là dấu hiệu cần được xử trí y tế khẩn cấp. "
-    "Bạn nên đến cơ sở y tế gần nhất hoặc gọi cấp cứu ngay, đặc biệt nếu có khó thở, "
+    "Bạn nên gọi cấp cứu hoặc đến cơ sở y tế khẩn cấp ngay nếu các triệu chứng này đang xảy ra hoặc tăng nhanh. "
+    "Các dấu hiệu cần chú ý gồm khó thở, "
     "sưng môi/mặt/họng, phát ban lan nhanh, sốt cao, đau dữ dội, phồng rộp hoặc bong tróc da.\n\n"
     "**Việc nên làm ngay**\n"
     "Ngưng thuốc/sản phẩm nghi gây phản ứng nếu vừa dùng, không bôi hoặc thử thêm hoạt chất mới, "
     "và mang theo thuốc/sản phẩm đã dùng khi đi khám.\n\n"
     "**Lưu ý**\n"
     "Tôi không thể chẩn đoán chắc chắn qua chat. Thông tin này chỉ nhằm định hướng an toàn và không thay thế cấp cứu hoặc khám trực tiếp."
+)
+
+ISOTRETINOIN_NEURO_EMERGENCY_TEMPLATE = (
+    "**Tóm tắt ngắn**\n"
+    "Bạn nên liên hệ bác sĩ/cơ sở y tế khẩn cấp ngay. Đau đầu dữ dội kèm nhìn mờ và buồn nôn/nôn khi đang dùng isotretinoin là nhóm triệu chứng cần được đánh giá ngay, không nên chờ 24-48 giờ.\n\n"
+    "**Việc nên làm ngay**\n"
+    "- Ngừng tự uống liều tiếp theo cho đến khi được bác sĩ đang điều trị hướng dẫn.\n"
+    "- Không tự tăng/giảm liều hoặc dùng thêm thuốc khác để xử lý triệu chứng.\n"
+    "- Mang theo tên thuốc, liều đang dùng và thời điểm xuất hiện triệu chứng khi đi khám.\n\n"
+    "**Lưu ý**\n"
+    "Tôi không thể chẩn đoán qua chat, nhưng đây không phải tình huống nên chỉ theo dõi tại nhà."
 )
 
 
@@ -90,6 +101,24 @@ CAUTION_TEMPLATE = (
     "Nên hỏi bác sĩ/dược sĩ nếu đang mang thai, cho con bú, có tiền sử dị ứng, hoặc cần phối hợp nhiều hoạt chất trị mụn."
 )
 
+TOPICAL_IRRITATION_CAUTION_TEMPLATE = CAUTION_TEMPLATE
+
+ORAL_ISOTRETINOIN_CAUTION_TEMPLATE = (
+    "**Lưu ý an toàn**\n"
+    "Isotretinoin đường uống cần bác sĩ đủ thẩm quyền chỉ định và theo dõi; không tự dùng, tự tăng liều hoặc dùng theo đơn cũ. "
+    "Nếu đang hoặc có thể mang thai, cần báo bác sĩ ngay vì thuốc có nguy cơ cao trong thai kỳ."
+)
+
+ANTIBIOTIC_CAUTION_TEMPLATE = (
+    "**Lưu ý an toàn**\n"
+    "Không tự dùng kháng sinh trị mụn hoặc dùng kéo dài khi chưa có bác sĩ đánh giá. Kháng sinh bôi thường không nên dùng đơn trị liệu; benzoyl peroxide có thể được phối hợp để giảm nguy cơ kháng kháng sinh khi phù hợp."
+)
+
+PREGNANCY_CAUTION_TEMPLATE = (
+    "**Lưu ý an toàn**\n"
+    "Khi đang mang thai, chuẩn bị mang thai hoặc cho con bú, nên hỏi bác sĩ sản khoa/da liễu trước khi dùng thuốc trị mụn, đặc biệt với retinoid hoặc thuốc kê đơn."
+)
+
 
 def classify_medical_severity(query: str) -> SeverityClassification:
     """Classify query severity with Vietnamese-first deterministic rules."""
@@ -133,6 +162,15 @@ def classify_medical_severity(query: str) -> SeverityClassification:
 
     if _has_any(accentless, ["sot cao"]) and _has_any(accentless, ["phat ban nang", "phat ban lan nhanh"]):
         mark("emergency_high_fever_with_severe_rash", "sốt cao kèm phát ban nặng")
+        return SeverityClassification(severity="emergency", matched_rules=rules, evidence=evidence)
+
+    if (
+        "isotretinoin" in accentless
+        and _has_any(accentless, ["dau dau du doi", "dau dau nang"])
+        and _has_any(accentless, ["nhin mo", "mo mat", "giam thi luc"])
+        and _has_any(accentless, ["buon non", "non"])
+    ):
+        mark("emergency_isotretinoin_neurologic_symptoms", "isotretinoin kèm đau đầu dữ dội/nhìn mờ/buồn nôn")
         return SeverityClassification(severity="emergency", matched_rules=rules, evidence=evidence)
 
     if _has_any(
@@ -234,8 +272,13 @@ def apply_severity_aware_answer_guard(query: str, answer: str) -> SeverityGuardR
         )
 
     if classification.severity == "emergency":
+        template = (
+            ISOTRETINOIN_NEURO_EMERGENCY_TEMPLATE
+            if "emergency_isotretinoin_neurologic_symptoms" in classification.matched_rules
+            else EMERGENCY_TEMPLATE
+        )
         return SeverityGuardResult(
-            answer=EMERGENCY_TEMPLATE,
+            answer=template,
             original_answer=answer,
             classification=classification,
             modified=True,
@@ -290,10 +333,8 @@ def apply_severity_aware_answer_guard(query: str, answer: str) -> SeverityGuardR
             cache_eligible=False,
         )
 
-    has_caution = _has_any(
-        answer_accentless,
-        ["giam tan suat", "tam ngung", "ngung", "hoi bac si", "gap bac si", "theo doi kich ung", "kich ung"],
-    )
+    caution_template = _select_caution_template(query, classification)
+    has_caution = _answer_already_has_relevant_caution(answer_accentless, caution_template)
     if has_caution:
         return SeverityGuardResult(
             answer=answer,
@@ -303,7 +344,7 @@ def apply_severity_aware_answer_guard(query: str, answer: str) -> SeverityGuardR
             cache_eligible=True,
         )
     return SeverityGuardResult(
-        answer=_append_once(answer, CAUTION_TEMPLATE),
+        answer=_append_once(answer, caution_template),
         original_answer=answer,
         classification=classification,
         modified=True,
@@ -333,10 +374,47 @@ def _append_once(answer: str, suffix: str) -> str:
     return answer.rstrip() + "\n\n" + suffix
 
 
+def _select_caution_template(query: str, classification: SeverityClassification) -> str:
+    _, accentless = build_matching_views(query or "")
+    if "isotretinoin" in accentless:
+        return ORAL_ISOTRETINOIN_CAUTION_TEMPLATE
+    if _has_any(accentless, ["khang sinh", "antibiotic", "clindamycin", "erythromycin", "doxycycline"]):
+        return ANTIBIOTIC_CAUTION_TEMPLATE
+    if _has_any(accentless, ["mang thai", "co thai", "co bau", "cho con bu", "thai ky"]):
+        return PREGNANCY_CAUTION_TEMPLATE
+    return TOPICAL_IRRITATION_CAUTION_TEMPLATE
+
+
+def _answer_already_has_relevant_caution(answer_accentless: str, template: str) -> bool:
+    _, template_accentless = build_matching_views(template)
+    if template == TOPICAL_IRRITATION_CAUTION_TEMPLATE:
+        return _has_any(
+            answer_accentless,
+            ["giam tan suat", "tam ngung", "theo doi kich ung", "kich ung", "do rat", "cham chich"],
+        )
+    if "isotretinoin" in template_accentless:
+        return _has_any(answer_accentless, ["isotretinoin"]) and _has_any(
+            answer_accentless,
+            ["bac si", "theo doi", "khong tu dung", "khong duoc tu dung", "chi dinh"],
+        )
+    if "khang sinh" in template_accentless:
+        return _has_any(answer_accentless, ["khang sinh", "clindamycin", "erythromycin"]) and _has_any(
+            answer_accentless,
+            ["don tri lieu", "don doc", "khang khang sinh", "khong tu dung", "bac si"],
+        )
+    if "mang thai" in template_accentless or "thai ky" in template_accentless:
+        return _has_any(answer_accentless, ["mang thai", "thai ky", "cho con bu"]) and _has_any(
+            answer_accentless,
+            ["bac si", "san khoa", "da lieu", "khong tu"],
+        )
+    return _has_any(answer_accentless, ["bac si", "hoi bac si", "khong tu dung", "theo doi"])
+
+
 __all__ = [
     "CAUTION_TEMPLATE",
     "EMERGENCY_TEMPLATE",
     "ISOTRETINOIN_PREGNANCY_URGENT_NOTE",
+    "ISOTRETINOIN_NEURO_EMERGENCY_TEMPLATE",
     "MedicalSeverity",
     "SeverityClassification",
     "SeverityGuardResult",

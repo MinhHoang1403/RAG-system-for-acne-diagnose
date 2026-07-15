@@ -6,6 +6,8 @@ import re
 import unicodedata
 from typing import Any, Literal
 
+from src.agent.requested_structure import parse_requested_structure
+
 
 ResponseProfile = Literal[
     "routine",
@@ -18,7 +20,7 @@ ResponseProfile = Literal[
     "safe_fallback",
 ]
 
-ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v4"
+ANSWER_FORMATTING_CONTRACT_VERSION = "answer_formatting_contract_v5"
 
 CANONICAL_DISCLAIMER = "Thông tin mang tính tham khảo và không thay thế chẩn đoán của bác sĩ."
 LEGACY_DISCLAIMER = "Thông tin này chỉ mang tính tham khảo và không thay thế tư vấn y khoa chuyên nghiệp."
@@ -32,7 +34,7 @@ LEGACY_BOILERPLATE_HEADINGS = (
 )
 
 ANSWER_FORMATTING_CONTRACT = """\
-ANSWER PRESENTATION CONTRACT V4:
+ANSWER PRESENTATION CONTRACT V5:
 - Dùng cùng một chuẩn trình bày cho Gemini, Gemini fallback, Ollama, cache hit, guardrail, severity guard và safe fallback; provider không được quyết định format.
 - Không lặp lại hoặc dùng nguyên câu hỏi của người dùng làm tiêu đề. Bắt đầu ngay bằng câu trả lời.
 - Trả lời trực tiếp trước, sau đó mới giải thích. Chỉ bắt đầu bằng "Có." hoặc "Không." khi câu hỏi thật sự là yes/no.
@@ -41,7 +43,9 @@ ANSWER PRESENTATION CONTRACT V4:
 - Routine skincare: dùng heading Markdown ngắn và bullet hành động rõ ràng; không gắn nhãn Guardrail nếu vẫn là câu hỏi in-domain.
 - Comparison: trả lời trực tiếp rồi dùng bảng Markdown GFM hoặc bullet đối chiếu; cover đủ các entity được hỏi.
 - Multi-intent: nếu câu hỏi có nhiều ý hoặc nhiều câu hỏi con, phải trả lời từng ý; không được rút toàn bộ câu hỏi về một câu định danh đơn lẻ.
-- Structured request: nếu người dùng yêu cầu bảng/cột/mục cụ thể, giữ đủ các cột hoặc mục đó trong answer.
+- Structured request: nếu người dùng yêu cầu bảng/cột/mục cụ thể, giữ đúng cấu trúc đó; không đảo cột thành hàng hoặc bỏ entity/item đã nêu.
+- Signs/symptoms vs causes: nếu người dùng hỏi dấu hiệu/triệu chứng/biểu hiện, chỉ liệt kê dấu hiệu quan sát được; không thay bằng nguyên nhân, thói quen hoặc yếu tố làm nặng.
+- Markdown style request: nếu người dùng yêu cầu tiêu đề đậm/in đậm/bold, dùng Markdown hợp lệ như **Tiêu đề**; frontend sẽ render, không được né instruction này.
 - Drug identity/composition: trả lời trực tiếp tên nhóm/hoạt chất, giải thích ngắn vai trò; bullet khi có nhiều hoạt chất; không mở đầu "Có." nếu câu hỏi không phải yes/no.
 - Safety/pregnancy: câu đầu nêu trực tiếp đối tượng được hỏi; mọi thuốc người dùng nêu phải được xử lý riêng; wording phải ưu tiên tránh/ngừng trong thai kỳ, không để người dùng hiểu rằng có thể tự tiếp tục dùng; chỉ render một warning.
 - Crisis/self-harm: ưu tiên hành động an toàn tức thời trước lời khuyên trị mụn; khuyên gọi cấp cứu/cơ sở y tế khẩn cấp nếu có nguy cơ hành động ngay và nhờ người tin cậy ở bên.
@@ -58,26 +62,70 @@ def answer_format_instruction_for_question(question: str) -> str:
     """Return intent-specific formatting hints without changing medical policy."""
 
     normalized = (question or "").lower()
+    structure = parse_requested_structure(question)
+    structure_hints: list[str] = []
+    if structure.wants_table:
+        if structure.required_columns:
+            columns = ", ".join(structure.required_columns)
+            count_text = (
+                f"đúng {structure.exact_column_count} cột"
+                if structure.exact_column_count
+                else "các cột người dùng yêu cầu"
+            )
+            structure_hints.append(
+                "FORMAT RIÊNG CHO BẢNG: dùng bảng Markdown GFM; header phải giữ "
+                f"{count_text}: {columns}. Không đảo các cột này thành hàng."
+            )
+        else:
+            structure_hints.append("FORMAT RIÊNG CHO BẢNG: dùng bảng Markdown GFM hợp lệ.")
+        if structure.required_rows:
+            rows = ", ".join(structure.required_rows)
+            structure_hints.append(
+                f"Các entity/hàng được hỏi phải xuất hiện trong answer: {rows}."
+            )
+    if structure.exact_item_count:
+        structure_hints.append(
+            f"Nếu trả lời dạng list, giữ đúng {structure.exact_item_count} ý chính như người dùng yêu cầu."
+        )
+    if structure.semantic_intent == "signs_symptoms":
+        structure_hints.append(
+            "Người dùng hỏi dấu hiệu/triệu chứng: chỉ nêu biểu hiện quan sát được, không thay bằng nguyên nhân/thói quen."
+        )
+    if "bold_headings" in structure.style_constraints:
+        structure_hints.append(
+            "Người dùng yêu cầu tiêu đề đậm: dùng Markdown **Tiêu đề** cho các heading ngắn, không để lộ ký tự thừa."
+        )
+
     if _is_comparison_question(normalized):
-        return (
+        base = (
             "FORMAT RIÊNG CHO CÂU SO SÁNH: Bắt đầu bằng một câu tóm tắt khác biệt chính. "
             "Sau đó dùng một bảng Markdown GFM hoặc bullet đối chiếu để cover đầy đủ từng entity trong câu hỏi. "
             "Nếu tài liệu chỉ đủ cho một entity, vẫn nhắc entity còn lại và nói rõ tài liệu hiện có chưa đủ thông tin về entity đó."
         )
+        return _join_instruction_hints(structure_hints, base)
     if _is_direct_question(normalized):
-        return (
+        base = (
             "FORMAT RIÊNG CHO CÂU YES/NO HOẶC ĐỊNH DANH: Câu đầu tiên phải là câu trả lời trực tiếp. "
             "Không lặp câu hỏi. Không dùng template nhiều mục nếu câu trả lời đã đủ rõ."
         )
+        return _join_instruction_hints(structure_hints, base)
     if _is_high_safety_question(normalized):
-        return (
+        base = (
             "FORMAT RIÊNG CHO CÂU AN TOÀN: Trả lời thận trọng, nêu điều không nên làm, "
             "và chỉ thêm mục 'Khi nào cần trao đổi với bác sĩ' nếu có dấu hiệu cần khám hoặc cấp cứu."
         )
-    return (
+        return _join_instruction_hints(structure_hints, base)
+    base = (
         "FORMAT RIÊNG CHO CÂU THƯỜNG: Trả lời gọn, theo đúng intent, 2-4 đoạn ngắn hoặc bullet. "
         "Không thêm khung template dài nếu người dùng chỉ hỏi một ý."
     )
+    return _join_instruction_hints(structure_hints, base)
+
+
+def _join_instruction_hints(hints: list[str], base: str) -> str:
+    if not hints:
+        return base
+    return " ".join(hints + [base])
 
 
 def infer_response_profile(
@@ -308,6 +356,11 @@ def _deterministic_profile_answer(
             "- Tôi không thể chẩn đoán tình trạng tâm thần qua chat, nhưng ý nghĩ tự làm hại bản thân là dấu hiệu cần được hỗ trợ trực tiếp."
         )
 
+    structure = parse_requested_structure(user_question)
+    structured_answer = _structured_requested_answer(text, structure)
+    if structured_answer:
+        return structured_answer
+
     if _is_retinoid_shared_class_question(text):
         return (
             "Có. Các hoạt chất này đều thuộc nhóm retinoid, nhưng khác đường dùng và bối cảnh chỉ định.\n\n"
@@ -478,6 +531,208 @@ def _deterministic_profile_answer(
         )
 
     return None
+
+
+def _structured_requested_answer(text: str, structure: Any) -> str | None:
+    if not getattr(structure, "has_constraints", False):
+        return None
+
+    if _is_bp_antimicrobial_mechanism_followup(text):
+        return (
+            "Benzoyl peroxide có tác dụng kháng khuẩn vì nó tạo môi trường oxy hóa bất lợi cho C. acnes, "
+            "vi khuẩn liên quan đến mụn viêm.\n\n"
+            "- Benzoyl peroxide không phải là kháng sinh, nên cơ chế này khác với clindamycin/erythromycin.\n"
+            "- Ngoài tác dụng kháng khuẩn/antimicrobial, benzoyl peroxide còn hỗ trợ tiêu sừng nhẹ và giảm bít tắc nang lông.\n"
+            "- Khi phối hợp với kháng sinh bôi, benzoyl peroxide có thể giúp tăng hiệu quả và giảm nguy cơ kháng kháng sinh."
+        )
+
+    if structure.wants_table and structure.semantic_intent == "treatment_summary":
+        return _treatment_summary_table(structure)
+
+    if structure.wants_table and structure.required_columns and structure.required_rows:
+        return _entity_table_for_requested_structure(structure)
+
+    if structure.semantic_intent == "signs_symptoms" and structure.exact_item_count:
+        return _signs_symptoms_list(structure.exact_item_count, text)
+
+    if "bold_headings" in structure.style_constraints and _asks_acne_mechanism(text):
+        return (
+            "**Bã nhờn**\n"
+            "Tăng tiết bã nhờn làm môi trường nang lông dễ bị bít tắc và thuận lợi cho mụn hình thành.\n\n"
+            "**Dày sừng cổ nang lông**\n"
+            "Tế bào sừng tích tụ ở cổ nang lông làm nhân mụn dễ xuất hiện.\n\n"
+            "**C. acnes và viêm**\n"
+            "C. acnes cùng phản ứng viêm góp phần làm mụn đỏ, đau hoặc có mủ."
+        )
+
+    return None
+
+
+def _treatment_summary_table(structure: Any) -> str:
+    headers = _requested_headers_or_default(
+        structure,
+        ["Thuốc", "Đường dùng", "Ưu điểm", "Lưu ý an toàn"],
+    )
+    rows = [
+        {
+            "thuoc": "Mụn nhẹ-trung bình: benzoyl peroxide hoặc retinoid bôi như adapalene",
+            "duong dung": "Bôi ngoài da",
+            "uu diem": "Tác động lên bít tắc nang lông và/hoặc C. acnes; có thể dùng làm nền trong nhiều phác đồ.",
+            "luu y an toan": "Có thể gây khô, đỏ, bong tróc; retinoid cần cẩn trọng thai kỳ.",
+        },
+        {
+            "thuoc": "Mụn trung bình-nặng: phối hợp điều trị bôi; cân nhắc kháng sinh uống hoặc isotretinoin khi bác sĩ đánh giá",
+            "duong dung": "Bôi và/hoặc đường uống tùy chỉ định",
+            "uu diem": "Phù hợp hơn khi mụn viêm nhiều, đau hoặc có nguy cơ sẹo.",
+            "luu y an toan": "Không tự dùng kháng sinh uống/isotretinoin; cần bác sĩ kê đơn và theo dõi.",
+        },
+    ]
+    return _markdown_table(headers, rows) + (
+        "\n\nBảng này là tóm tắt định hướng theo tài liệu hiện có; lựa chọn cụ thể vẫn cần bác sĩ đánh giá mức độ mụn, nguy cơ sẹo, thai kỳ và khả năng dung nạp."
+    )
+
+
+def _entity_table_for_requested_structure(structure: Any) -> str:
+    headers = _requested_headers_or_default(
+        structure,
+        ["Hoạt chất", "Vai trò chính", "Tác dụng phụ thường gặp", "Lưu ý sử dụng"],
+    )
+    rows = []
+    for row_name in structure.required_rows:
+        facts = _entity_fact_cells(row_name)
+        if not facts:
+            continue
+        rows.append(facts)
+    if not rows:
+        return ""
+    return _markdown_table(headers, rows)
+
+
+def _requested_headers_or_default(structure: Any, default: list[str]) -> list[str]:
+    if not structure.required_columns:
+        return default
+    return [_display_column_label(column) for column in structure.required_columns]
+
+
+def _markdown_table(headers: list[str], rows: list[dict[str, str]]) -> str:
+    keys = [_column_key(header) for header in headers]
+    output = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join("---" for _ in headers) + " |",
+    ]
+    for row in rows:
+        cells = [row.get(key) or row.get(_fallback_column_key(key), "Tài liệu hiện có chưa đủ thông tin.") for key in keys]
+        output.append("| " + " | ".join(cells) + " |")
+    return "\n".join(output)
+
+
+def _display_column_label(column: str) -> str:
+    labels = {
+        "thuoc": "Thuốc",
+        "hoat chat": "Hoạt chất",
+        "duong dung": "Đường dùng",
+        "uu diem": "Ưu điểm",
+        "vai tro chinh": "Vai trò chính",
+        "tac dung phu thuong gap": "Tác dụng phụ thường gặp",
+        "luu y su dung": "Lưu ý sử dụng",
+        "luu y an toan": "Lưu ý an toàn",
+    }
+    return labels.get(column, column[:1].upper() + column[1:])
+
+
+def _column_key(header: str) -> str:
+    return _fold(header).replace("/", " ").strip()
+
+
+def _fallback_column_key(key: str) -> str:
+    if key in {"ten thuoc", "lua chon"}:
+        return "thuoc"
+    if key in {"thanh phan"}:
+        return "hoat chat"
+    if key in {"loi ich"}:
+        return "uu diem"
+    if key in {"canh bao", "luu y"}:
+        return "luu y an toan"
+    if key in {"vai tro"}:
+        return "vai tro chinh"
+    if key in {"tac dung phu"}:
+        return "tac dung phu thuong gap"
+    return key
+
+
+def _entity_fact_cells(row_name: str) -> dict[str, str] | None:
+    key = _fold(row_name)
+    facts: dict[str, dict[str, str]] = {
+        "adapalene": {
+            "hoat chat": "Adapalene",
+            "thuoc": "Adapalene",
+            "vai tro chinh": "Retinoid bôi, giúp điều hòa sừng hóa nang lông, giảm bít tắc/nhân mụn và hỗ trợ chống viêm.",
+            "tac dung phu thuong gap": "Khô, đỏ, rát hoặc bong tróc.",
+            "luu y su dung": "Cần cẩn trọng thai kỳ; không tự phối hợp nhiều hoạt chất khi da kích ứng.",
+            "luu y an toan": "Cần cẩn trọng thai kỳ; không tự phối hợp nhiều hoạt chất khi da kích ứng.",
+            "duong dung": "Bôi ngoài da",
+            "uu diem": "Hữu ích cho nhân mụn/bít tắc và duy trì điều trị.",
+        },
+        "benzoyl peroxide": {
+            "hoat chat": "Benzoyl peroxide",
+            "thuoc": "Benzoyl peroxide",
+            "vai tro chinh": "Không phải kháng sinh; có tác dụng kháng khuẩn/antimicrobial với C. acnes và tiêu sừng nhẹ.",
+            "tac dung phu thuong gap": "Khô, đỏ, rát, bong tróc; có thể làm bạc màu vải/tóc.",
+            "luu y su dung": "Tránh để dây vào vải/tóc; giảm tần suất hoặc hỏi bác sĩ nếu kích ứng rõ.",
+            "luu y an toan": "Tránh để dây vào vải/tóc; giảm tần suất hoặc hỏi bác sĩ nếu kích ứng rõ.",
+            "duong dung": "Bôi ngoài da",
+            "uu diem": "Bổ sung cơ chế kháng khuẩn và giúp giảm nguy cơ kháng kháng sinh khi phối hợp kháng sinh bôi.",
+        },
+        "salicylic acid": {
+            "hoat chat": "Salicylic acid",
+            "thuoc": "Salicylic acid",
+            "vai tro chinh": "Hoạt chất tiêu sừng/keratolytic, hỗ trợ giảm bít tắc bề mặt.",
+            "tac dung phu thuong gap": "Khô, châm chích hoặc kích ứng nếu dùng quá dày/không phù hợp.",
+            "luu y su dung": "Bắt đầu thận trọng, tránh phối hợp dồn dập nhiều hoạt chất dễ kích ứng.",
+            "luu y an toan": "Bắt đầu thận trọng, tránh phối hợp dồn dập nhiều hoạt chất dễ kích ứng.",
+            "duong dung": "Bôi ngoài da",
+            "uu diem": "Có thể hữu ích với bít tắc/nhân mụn nhẹ nếu da dung nạp.",
+        },
+        "clindamycin": {
+            "hoat chat": "Clindamycin",
+            "thuoc": "Clindamycin",
+            "vai tro chinh": "Kháng sinh bôi, nhắm vào vi khuẩn liên quan mụn viêm.",
+            "tac dung phu thuong gap": "Kích ứng tại chỗ; nguy cơ kháng kháng sinh nếu dùng đơn độc/kéo dài.",
+            "luu y su dung": "Không khuyến cáo dùng đơn trị liệu; thường cần phối hợp benzoyl peroxide khi bác sĩ chỉ định.",
+            "luu y an toan": "Không khuyến cáo dùng đơn trị liệu; thường cần phối hợp benzoyl peroxide khi bác sĩ chỉ định.",
+            "duong dung": "Bôi ngoài da",
+            "uu diem": "Có thể hỗ trợ mụn viêm khi dùng đúng chỉ định.",
+        },
+    }
+    return facts.get(key)
+
+
+def _signs_symptoms_list(count: int, text: str) -> str:
+    signs = [
+        "Đỏ rát rõ ở vùng bôi.",
+        "Khô căng hoặc bong tróc tăng lên.",
+        "Châm chích/bỏng rát kéo dài thay vì chỉ thoáng qua.",
+        "Sưng, nổi mẩn hoặc phát ban quanh vùng dùng sản phẩm.",
+        "Đau nhiều, rỉ dịch hoặc phồng rộp.",
+    ]
+    selected = signs[: max(1, min(count, len(signs)))]
+    intro = "Các dấu hiệu/triệu chứng có thể quan sát gồm:"
+    if "tac dung phu" in text or "side effect" in text:
+        intro = "Các dấu hiệu tác dụng phụ/kích ứng có thể quan sát gồm:"
+    return intro + "\n\n" + "\n".join(f"- {item}" for item in selected)
+
+
+def _is_bp_antimicrobial_mechanism_followup(text: str) -> bool:
+    has_bp = "benzoyl peroxide" in text or re.search(r"(?<![a-z0-9])bp(?![a-z0-9])", text)
+    asks_why = any(marker in text for marker in ["tai sao", "vi sao", "vì sao", "why", "how"])
+    antimicrobial = any(marker in text for marker in ["khang khuan", "antimicrobial", "c. acnes", "vi khuan"])
+    return bool(has_bp and asks_why and antimicrobial)
+
+
+def _asks_acne_mechanism(text: str) -> bool:
+    return any(marker in text for marker in ["co che", "cơ chế", "vi sao gay mun", "hinh thanh mun"]) or (
+        "mun" in text and any(marker in text for marker in ["ba nhon", "c. acnes", "viem", "day sung"])
+    )
 
 
 def _normalize_newlines(text: str) -> str:
