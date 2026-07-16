@@ -35,6 +35,7 @@ Trạng thái tổng quát:
 - [Chạy Backend](#chạy-backend)
 - [Cài Đặt Và Chạy Frontend](#cài-đặt-và-chạy-frontend)
 - [Chạy Hệ Thống Local](#chạy-hệ-thống-local)
+- [Lưu Ý Cho Fresh Clone](#lưu-ý-cho-fresh-clone)
 - [Kiểm Tra Trước Khi Dùng UI](#kiểm-tra-trước-khi-dùng-ui)
 - [Test Và Eval](#test-và-eval)
 - [API Cơ Bản](#api-cơ-bản)
@@ -171,13 +172,14 @@ src/
 scripts/          Init, ingestion, validation, eval, diagnostics
 tests/            Python test suite
 data/             Local runtime data, taxonomy, cache, manifests
-reports/          Generated audit/debug reports, gitignored
+reports/          Audit/review reports; report runtime/debug tạm thời nên để untracked
 .github/          GitHub Actions workflows
 ```
 
 `data/taxonomy/` là dữ liệu nguồn có kiểm soát. Các thư mục runtime như
 `data/postgres`, `data/qdrant`, `data/neo4j`, `data/redis_data`, `data/cache`,
-frontend `dist/`, reports và logs không nên commit.
+frontend `dist/`, logs và report debug tạm thời không nên commit. Một số
+audit/review report ổn định có thể được commit nếu maintainer chủ động muốn lưu.
 
 ## Yêu Cầu Môi Trường
 
@@ -238,9 +240,13 @@ Quy tắc an toàn:
 
 - Không commit `.env`.
 - Không đưa API key thật vào README, issue, PR hoặc log.
+- `GOOGLE_API_KEY` cần thiết nếu dùng Gemini generation hoặc Gemini embedding.
+- `LLAMA_CLOUD_API_KEY` chỉ cần khi chạy ingestion PDF/DOCX.
 - Để `QDRANT_API_KEY=` trống khi dùng local Docker Qdrant không auth.
 - Không đổi `EMBEDDING_MODEL` hoặc `EMBEDDING_DIMENSIONS` nếu chưa có kế hoạch
   rebuild/migrate Qdrant.
+- Sau khi đổi `.env`, restart backend.
+- Nếu đổi biến `VITE_*`, restart Vite frontend.
 
 Các nhóm biến quan trọng trong `.env.example`:
 
@@ -372,6 +378,22 @@ Có thể dùng script hỗ trợ local:
 Script này không chạy ingestion, không reset database và không xóa cache. Nếu
 port backend bị process khác chiếm, script sẽ báo để developer xử lý thủ công.
 
+## Lưu Ý Cho Fresh Clone
+
+Sau khi clone repository, Docker services có thể khởi động nếu Docker Desktop đã
+sẵn sàng, và backend/frontend có thể chạy nếu `.env` được cấu hình đúng. Tuy
+nhiên chất lượng trả lời RAG đầy đủ phụ thuộc vào dữ liệu runtime trong Qdrant,
+Neo4j, PostgreSQL và Redis.
+
+Runtime DB/vector/graph data không được đảm bảo tự có trong một fresh clone.
+Người dùng mới có hai lựa chọn:
+
+1. Restore dữ liệu hoặc backup do maintainer cung cấp nếu có.
+2. Chạy ingestion/rebuild workflows với source data và API key cần thiết.
+
+Nếu knowledge base chưa có dữ liệu, app vẫn có thể khởi động nhưng câu trả lời
+có thể fallback, thiếu nguồn hoặc có chất lượng thấp hơn.
+
 ## Kiểm Tra Trước Khi Dùng UI
 
 Chạy pre-UI check:
@@ -482,8 +504,10 @@ Invoke-RestMethod `
 }
 ```
 
-Endpoint hiện phục vụ app nội bộ/local development. Trước khi mở public API,
-cần bổ sung API key, rate limit, CORS whitelist chặt hơn và vận hành qua HTTPS.
+`/chat` hiện được thiết kế chủ yếu cho frontend nội bộ và local development.
+Không nên expose public trực tiếp endpoint này trước khi bổ sung API key auth,
+rate limit, strict CORS, HTTPS và response schema ổn định. Nếu muốn cho bên thứ
+ba tích hợp, nên tạo endpoint public riêng như `/v1/chat`.
 
 ## Ingestion Và Knowledge Base
 
@@ -668,6 +692,8 @@ Trước khi triển khai public hoặc dùng ngoài local network:
 - Bật HTTPS qua reverse proxy.
 - Thêm API key hoặc auth layer cho backend.
 - Thêm rate limit cho `/chat` và các endpoint có thể gọi provider.
+- Không expose trực tiếp `/chat` như public third-party API; nếu cần tích hợp
+  bên ngoài, nên thiết kế endpoint public riêng như `/v1/chat`.
 - Whitelist CORS origin cụ thể, không dùng wildcard.
 - Không expose PostgreSQL, Neo4j, Redis hoặc Qdrant ra Internet.
 - Tắt `PHASE2_DEBUG_METADATA` nếu không cần debug.
