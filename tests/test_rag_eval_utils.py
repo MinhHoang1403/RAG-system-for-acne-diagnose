@@ -14,9 +14,14 @@ from rag_eval_utils import (  # noqa: E402
     CORE_METRIC_KEYS,
     contains_markdown_table,
     create_evaluation_charts,
+    judge_disagreement_rows,
+    judge_score_to_100,
+    parse_judge_json,
     read_jsonl,
     score_case,
+    select_judge_sample,
     summarize_core_metrics,
+    summarize_judge_results,
 )
 
 
@@ -165,3 +170,115 @@ def test_chart_helper_can_write_to_tmp_path(tmp_path: Path) -> None:
     if result["status"] == "created":
         for path in result["plots"].values():
             assert Path(path).exists()
+
+
+def test_parse_judge_json_parses_strict_json() -> None:
+    parsed = parse_judge_json(
+        '{"answer_relevance":5,"faithfulness_to_sources":4,"completeness":4,'
+        '"medical_safety":5,"instruction_following":4,"clarity_vietnamese":5,'
+        '"overall":4,"pass":true,"issues":[],"rationale":"Ổn"}'
+    )
+    assert parsed["answer_relevance"] == 5
+    assert parsed["faithfulness_to_sources"] == 4
+    assert parsed["pass"] is True
+
+
+def test_parse_judge_json_parses_markdown_fence() -> None:
+    parsed = parse_judge_json(
+        """```json
+        {
+          "answer_relevance": 3,
+          "faithfulness_to_sources": 3,
+          "completeness": 3,
+          "medical_safety": 4,
+          "instruction_following": 3,
+          "clarity_vietnamese": 4,
+          "overall": 3,
+          "pass": true,
+          "issues": ["short"],
+          "rationale": "acceptable"
+        }
+        ```"""
+    )
+    assert parsed["medical_safety"] == 4
+    assert parsed["issues"] == ["short"]
+
+
+def test_judge_score_to_100_returns_expected_range() -> None:
+    judge = {
+        "answer_relevance": 5,
+        "faithfulness_to_sources": 4,
+        "completeness": 4,
+        "medical_safety": 5,
+        "instruction_following": 4,
+        "clarity_vietnamese": 5,
+    }
+    score = judge_score_to_100(judge)
+    assert score is not None
+    assert 0 <= score <= 100
+    assert score > 70
+
+
+def test_select_judge_sample_respects_size_and_includes_failures() -> None:
+    rows = [
+        {
+            "case_id": f"case_{index:03d}",
+            "category": "core" if index % 2 else "safety",
+            "overall_score": 90,
+            "failure_reasons": [],
+        }
+        for index in range(20)
+    ]
+    rows[7]["overall_score"] = 20
+    rows[7]["failure_reasons"] = ["safety"]
+    sample = select_judge_sample(rows, sample_size=6, random_seed=123)
+    assert len(sample) == 6
+    assert any(row["case_id"] == "case_007" for row in sample)
+
+
+def test_summarize_judge_results_returns_expected_keys() -> None:
+    rows = [
+        {"overall_score": 80, "judge_score_100": 75, "judge_pass": True},
+        {"overall_score": 30, "judge_score_100": 70, "judge_pass": False},
+    ]
+    summary = summarize_judge_results(rows, disagreement_threshold=25)
+    assert list(summary) == [
+        "judge_cases",
+        "judge_avg_score",
+        "judge_pass_rate",
+        "judge_agreement_rate",
+        "judge_disagreement_count",
+        "judge_avg_abs_delta",
+    ]
+    assert summary["judge_cases"] == 2
+    assert summary["judge_disagreement_count"] == 1
+
+
+def test_judge_disagreement_rows_detects_large_delta() -> None:
+    rows = [
+        {
+            "case_id": "a",
+            "category": "core",
+            "question": "Q",
+            "overall_score": 90,
+            "judge_score_100": 50,
+            "failure_reasons": [],
+            "judge_issues": ["missing source"],
+            "judge_rationale": "Too optimistic rule score",
+            "answer": "A",
+        },
+        {
+            "case_id": "b",
+            "category": "core",
+            "question": "Q2",
+            "overall_score": 80,
+            "judge_score_100": 75,
+            "failure_reasons": [],
+            "judge_issues": [],
+            "judge_rationale": "",
+            "answer": "A2",
+        },
+    ]
+    disagreements = judge_disagreement_rows(rows, disagreement_threshold=25)
+    assert len(disagreements) == 1
+    assert disagreements[0]["case_id"] == "a"

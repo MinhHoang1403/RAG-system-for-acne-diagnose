@@ -42,14 +42,22 @@ CHART_FILENAMES = {
 
 JUDGE_SCORE_KEYS = [
     "answer_relevance",
-    "faithfulness",
+    "faithfulness_to_sources",
     "completeness",
-    "instruction_following",
     "medical_safety",
-    "source_support",
+    "instruction_following",
     "clarity_vietnamese",
     "overall",
 ]
+
+JUDGE_SCORE_WEIGHTS = {
+    "answer_relevance": 15,
+    "faithfulness_to_sources": 20,
+    "completeness": 15,
+    "medical_safety": 25,
+    "instruction_following": 15,
+    "clarity_vietnamese": 10,
+}
 
 
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -414,6 +422,227 @@ def failure_counts_by_category(rows: list[dict[str, Any]]) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
 
 
+def select_judge_sample(
+    rows: list[dict[str, Any]],
+    *,
+    sample_size: int = 80,
+    random_seed: int = 42,
+) -> list[dict[str, Any]]:
+    if sample_size <= 0 or not rows:
+        return []
+    if len(rows) <= sample_size:
+        return list(rows)
+
+    import random
+
+    rng = random.Random(random_seed)
+    selected: dict[str, dict[str, Any]] = {}
+
+    low_score_quota = max(1, sample_size // 2)
+    low_score_rows = sorted(
+        rows,
+        key=lambda row: (
+            0 if row.get("failure_reasons") else 1,
+            float(row.get("overall_score") or 0.0),
+            str(row.get("case_id")),
+        ),
+    )
+    for row in low_score_rows[:low_score_quota]:
+        selected[str(row.get("case_id"))] = row
+
+    remaining_quota = sample_size - len(selected)
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row.get("category") or "uncategorized")].append(row)
+
+    categories = sorted(grouped)
+    while remaining_quota > 0 and categories:
+        added_this_round = False
+        for category in categories:
+            if remaining_quota <= 0:
+                break
+            candidates = [row for row in grouped[category] if str(row.get("case_id")) not in selected]
+            if not candidates:
+                continue
+            chosen = rng.choice(candidates)
+            selected[str(chosen.get("case_id"))] = chosen
+            remaining_quota -= 1
+            added_this_round = True
+        if not added_this_round:
+            break
+
+    if len(selected) < sample_size:
+        leftovers = [row for row in rows if str(row.get("case_id")) not in selected]
+        rng.shuffle(leftovers)
+        for row in leftovers[: sample_size - len(selected)]:
+            selected[str(row.get("case_id"))] = row
+
+    ordered = list(selected.values())
+    ordered.sort(key=lambda row: str(row.get("case_id")))
+    return ordered[:sample_size]
+
+
+def summarize_judge_results(
+    judge_rows: list[dict[str, Any]],
+    *,
+    disagreement_threshold: float = 25.0,
+) -> dict[str, Any]:
+    scored = [row for row in judge_rows if isinstance(row.get("judge_score_100"), (int, float))]
+    if not scored:
+        return {
+            "judge_cases": 0,
+            "judge_avg_score": 0.0,
+            "judge_pass_rate": 0.0,
+            "judge_agreement_rate": 0.0,
+            "judge_disagreement_count": 0,
+            "judge_avg_abs_delta": 0.0,
+        }
+
+    deltas = [abs(float(row.get("overall_score") or 0.0) - float(row["judge_score_100"])) for row in scored]
+    disagreements = [delta for delta in deltas if delta > disagreement_threshold]
+    return {
+        "judge_cases": len(scored),
+        "judge_avg_score": round(statistics.mean(float(row["judge_score_100"]) for row in scored), 2),
+        "judge_pass_rate": round((sum(1 for row in scored if row.get("judge_pass")) / len(scored)) * 100.0, 2),
+        "judge_agreement_rate": round(((len(scored) - len(disagreements)) / len(scored)) * 100.0, 2),
+        "judge_disagreement_count": len(disagreements),
+        "judge_avg_abs_delta": round(statistics.mean(deltas), 2),
+    }
+
+
+def judge_disagreement_rows(
+    judge_rows: list[dict[str, Any]],
+    *,
+    disagreement_threshold: float = 25.0,
+) -> list[dict[str, Any]]:
+    disagreements: list[dict[str, Any]] = []
+    for row in judge_rows:
+        judge_score = row.get("judge_score_100")
+        if not isinstance(judge_score, (int, float)):
+            continue
+        delta = abs(float(row.get("overall_score") or 0.0) - float(judge_score))
+        if delta <= disagreement_threshold:
+            continue
+        disagreements.append(
+            {
+                "case_id": row.get("case_id"),
+                "category": row.get("category"),
+                "question": row.get("question"),
+                "overall_score": row.get("overall_score"),
+                "judge_score_100": judge_score,
+                "delta": round(delta, 2),
+                "failure_reasons": row.get("failure_reasons"),
+                "judge_issues": row.get("judge_issues"),
+                "judge_rationale": row.get("judge_rationale"),
+                "answer": row.get("answer"),
+            }
+        )
+    disagreements.sort(key=lambda row: (-float(row.get("delta") or 0.0), str(row.get("case_id"))))
+    return disagreements
+
+
+def create_judge_charts(
+    judge_rows: list[dict[str, Any]],
+    output_dir: str | Path,
+) -> dict[str, Any]:
+    plot_dir = Path(output_dir)
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    plot_paths = {
+        "judge_score_by_category": str(plot_dir / "judge_score_by_category.png"),
+        "judge_vs_rule_score": str(plot_dir / "judge_vs_rule_score.png"),
+    }
+
+    scored = [row for row in judge_rows if isinstance(row.get("judge_score_100"), (int, float))]
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:  # pragma: no cover - optional dependency
+        return {"status": "skipped", "reason": f"matplotlib unavailable: {exc}", "plots": plot_paths}
+
+    grouped: dict[str, list[float]] = defaultdict(list)
+    for row in scored:
+        grouped[str(row.get("category") or "uncategorized")].append(float(row["judge_score_100"]))
+    labels = sorted(grouped) or ["no_data"]
+    values = [round(statistics.mean(grouped[label]), 2) for label in labels] if grouped else [0.0]
+    _bar_chart(
+        plt,
+        labels=labels,
+        values=values,
+        title="LLM-as-Judge score trung bình theo nhóm",
+        ylabel="Judge score 0-100",
+        path=plot_paths["judge_score_by_category"],
+        ylim=(0, 100),
+        rotate=True,
+    )
+
+    fig, ax = plt.subplots(figsize=(6.5, 6.0))
+    if scored:
+        x_values = [float(row.get("overall_score") or 0.0) for row in scored]
+        y_values = [float(row["judge_score_100"]) for row in scored]
+        ax.scatter(x_values, y_values, alpha=0.75, color="#4c78a8")
+        ax.plot([0, 100], [0, 100], linestyle="--", color="#e15759", linewidth=1)
+        ax.set_xlim(0, 100)
+        ax.set_ylim(0, 100)
+        ax.set_xlabel("Deterministic overall_score")
+        ax.set_ylabel("LLM judge_score_100")
+    else:
+        ax.text(0.5, 0.5, "Không có judge score", ha="center", va="center")
+        ax.set_axis_off()
+    ax.set_title("So sánh deterministic score và LLM judge score")
+    fig.tight_layout()
+    fig.savefig(plot_paths["judge_vs_rule_score"], dpi=160)
+    plt.close(fig)
+
+    return {"status": "created", "plots": plot_paths}
+
+
+def build_judge_report_section(
+    judge_summary: dict[str, Any] | None,
+    judge_chart_paths: dict[str, str] | None = None,
+) -> str:
+    if not judge_summary or not judge_summary.get("judge_cases"):
+        return "\n".join(
+            [
+                "## Đánh giá bổ sung bằng LLM-as-Judge",
+                "",
+                "LLM-as-Judge chưa chạy trong lần đánh giá này.",
+                "",
+            ]
+        )
+
+    lines = [
+        "## Đánh giá bổ sung bằng LLM-as-Judge",
+        "",
+        "LLM-as-Judge được dùng như lớp đánh giá bổ sung để đối chiếu chất lượng ngữ nghĩa của câu trả lời. Kết quả này không thay thế deterministic score và không thay thế đánh giá y khoa của chuyên gia.",
+        "",
+        "| Chỉ số | Giá trị |",
+        "|---|---:|",
+        f"| Số case được judge | {judge_summary.get('judge_cases', 0)} |",
+        f"| Judge average score | {float(judge_summary.get('judge_avg_score') or 0.0):.2f} |",
+        f"| Judge pass rate | {float(judge_summary.get('judge_pass_rate') or 0.0):.2f}% |",
+        f"| Agreement với rule score | {float(judge_summary.get('judge_agreement_rate') or 0.0):.2f}% |",
+        f"| Disagreement cases | {judge_summary.get('judge_disagreement_count', 0)} |",
+        f"| Avg absolute delta | {float(judge_summary.get('judge_avg_abs_delta') or 0.0):.2f} |",
+        "",
+        "File chi tiết:",
+        "- `judge_results.csv`",
+        "- `judge_summary.json`",
+        "- `judge_disagreements.csv`",
+    ]
+    for path in (judge_chart_paths or {}).values():
+        lines.append(f"- `{Path(path).as_posix()}`")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def append_judge_section_to_report(report_path: str | Path, judge_section: str) -> None:
+    target = Path(report_path)
+    existing = target.read_text(encoding="utf-8") if target.exists() else ""
+    marker = "## Đánh giá bổ sung bằng LLM-as-Judge"
+    if marker in existing:
+        existing = existing.split(marker, 1)[0].rstrip() + "\n\n"
+    target.write_text(existing.rstrip() + "\n\n" + judge_section.rstrip() + "\n", encoding="utf-8")
+
+
 def create_evaluation_charts(
     rows: list[dict[str, Any]],
     core_metrics: dict[str, Any],
@@ -605,6 +834,10 @@ def parse_judge_json(text: str) -> dict[str, Any]:
     if match:
         raw = match.group(0)
     data = json.loads(raw)
+    if "faithfulness_to_sources" not in data and "faithfulness" in data:
+        data["faithfulness_to_sources"] = data.get("faithfulness")
+    if "faithfulness_to_sources" not in data and "source_support" in data:
+        data["faithfulness_to_sources"] = data.get("source_support")
     for key in JUDGE_SCORE_KEYS:
         if key in data:
             data[key] = int(max(1, min(5, int(data[key]))))
@@ -618,27 +851,15 @@ def parse_judge_json(text: str) -> dict[str, Any]:
 def judge_score_to_100(judge: dict[str, Any] | None) -> float | None:
     if not judge:
         return None
-    weights = {
-        "answer_relevance": 15,
-        "faithfulness": 10,
-        "source_support": 10,
-        "completeness": 15,
-        "instruction_following": 15,
-        "medical_safety": 20,
-        "clarity_vietnamese": 10,
-        "overall": 5,
-    }
     total = 0.0
-    max_total = 0.0
-    for key, weight in weights.items():
+    for key, weight in JUDGE_SCORE_WEIGHTS.items():
         value = judge.get(key)
+        if value is None and key == "faithfulness_to_sources":
+            value = judge.get("faithfulness") or judge.get("source_support")
         if value is None:
-            continue
+            return None
         total += ((float(value) - 1.0) / 4.0) * weight
-        max_total += weight
-    if max_total == 0:
-        return None
-    return round((total / max_total) * 100.0, 2)
+    return round(max(0.0, min(100.0, total)), 2)
 
 
 def final_score(row: dict[str, Any], judge: dict[str, Any] | None = None) -> float:
