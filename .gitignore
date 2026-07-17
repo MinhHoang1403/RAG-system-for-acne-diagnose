@@ -64,7 +64,11 @@ dmypy.json
 
 # Jupyter
 .ipynb_checkpoints/
+**/.ipynb_checkpoints/
 *.ipynb
+
+# Local notebook recovery backups
+local_notebook_backups/
 
 # ---------------------------------------------------------------------------
 # Node.js / Web (src/frontend)
@@ -137,6 +141,7 @@ logs/
 *.log
 log/
 reports/
+reports/evaluation/
 
 # ---------------------------------------------------------------------------
 # IDE / Editor
