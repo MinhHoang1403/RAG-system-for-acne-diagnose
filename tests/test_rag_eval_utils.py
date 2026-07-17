@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -26,6 +28,8 @@ from rag_eval_utils import (  # noqa: E402
 
 
 DATASET_PATH = PROJECT_ROOT / "notebooks" / "eval_data" / "acne_rag_eval_set.jsonl"
+NOTEBOOK_PATH = PROJECT_ROOT / "notebooks" / "rag_llm_judge.ipynb"
+BUILD_EVAL_SET_PATH = PROJECT_ROOT / "notebooks" / "eval_data" / "build_acne_eval_set.py"
 
 
 def test_dataset_has_exactly_300_unique_cases() -> None:
@@ -60,6 +64,41 @@ def test_dataset_required_fields_and_categories() -> None:
         assert case.get("question")
         assert isinstance(case.get("expected_keywords"), list)
         assert isinstance(case.get("forbidden_keywords"), list)
+
+
+def test_build_eval_set_generates_300_cases_with_unique_ids() -> None:
+    spec = importlib.util.spec_from_file_location("build_acne_eval_set", BUILD_EVAL_SET_PATH)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    cases = module.build_cases()
+    module.validate_cases(cases)
+    ids = [case["id"] for case in cases]
+    assert len(cases) == 300
+    assert len(ids) == len(set(ids))
+    assert all(case.get("category") and case.get("question") for case in cases)
+
+
+def test_notebook_validates_dataset_ids_before_case_lookup() -> None:
+    notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
+    text = "\n".join("".join(cell.get("source", [])) for cell in notebook.get("cells", []))
+
+    assert "Invalid evaluation dataset" in text
+    assert "Every case must have unique id/category/question" in text
+    assert "python notebooks/eval_data/build_acne_eval_set.py" in text
+    assert "required_fields = {\"id\", \"category\", \"question\"}" in text
+    assert "case_by_id = {case[\"id\"]: case for case in cases}" in text
+    assert "DATASET_PATH = Path(\"notebooks/eval_data/acne_rag_eval_set.jsonl\")" in text
+
+    for legacy_name in [
+        "EVAL_ALLOW_LIVE_CHAT",
+        "EVAL_USE_LLM_JUDGE",
+        "EVAL_SAMPLE_LIMIT",
+        "EVAL_JUDGE_PROVIDER",
+    ]:
+        assert legacy_name not in text
 
 
 def test_markdown_table_detection() -> None:
