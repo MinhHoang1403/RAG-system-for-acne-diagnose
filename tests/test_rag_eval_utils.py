@@ -101,13 +101,13 @@ def test_notebook_validates_dataset_ids_before_case_lookup() -> None:
         assert legacy_name not in text
 
 
-def test_notebook_supports_ollama_judge_provider() -> None:
+def test_notebook_defaults_to_ollama_judge_provider() -> None:
     notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
     text = "\n".join("".join(cell.get("source", [])) for cell in notebook.get("cells", []))
 
     required = [
-        'JUDGE_PROVIDER = "gemini"',
-        '"gemini" | "ollama"',
+        'JUDGE_PROVIDER = "ollama"',
+        '"ollama" | "gemini"',
         "JUDGE_OLLAMA_BASE_URL",
         "JUDGE_OLLAMA_MODEL",
         "JUDGE_OLLAMA_TIMEOUT_SECONDS",
@@ -115,6 +115,11 @@ def test_notebook_supports_ollama_judge_provider() -> None:
         "/api/generate",
         '"format": "json"',
         'fallback_payload.pop("format", None)',
+        "judge_provider not in",
+        'judge_provider == "gemini"',
+        'judge_provider == "ollama"',
+        "judge_call = call_ollama_judge",
+        "Judge provider:",
         '"judge_provider": judge_provider',
         '"judge_model": judge_model',
         '"judge_error": last_error',
@@ -123,6 +128,9 @@ def test_notebook_supports_ollama_judge_provider() -> None:
         assert item in text
 
     assert 'judge_provider != "gemini"' not in text
+
+    for index, cell in enumerate(notebook.get("cells", []), 1):
+        assert not cell.get("outputs"), f"Notebook output not cleared in cell {index}"
 
 
 def test_markdown_table_detection() -> None:
