@@ -101,6 +101,30 @@ def test_notebook_validates_dataset_ids_before_case_lookup() -> None:
         assert legacy_name not in text
 
 
+def test_notebook_supports_ollama_judge_provider() -> None:
+    notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
+    text = "\n".join("".join(cell.get("source", [])) for cell in notebook.get("cells", []))
+
+    required = [
+        'JUDGE_PROVIDER = "gemini"',
+        '"gemini" | "ollama"',
+        "JUDGE_OLLAMA_BASE_URL",
+        "JUDGE_OLLAMA_MODEL",
+        "JUDGE_OLLAMA_TIMEOUT_SECONDS",
+        "def call_ollama_judge",
+        "/api/generate",
+        '"format": "json"',
+        'fallback_payload.pop("format", None)',
+        '"judge_provider": judge_provider',
+        '"judge_model": judge_model',
+        '"judge_error": last_error',
+    ]
+    for item in required:
+        assert item in text
+
+    assert 'judge_provider != "gemini"' not in text
+
+
 def test_markdown_table_detection() -> None:
     table = "| Hoạt chất | Vai trò |\n|---|---|\n| Adapalene | Retinoid |"
     not_table = "- Adapalene: retinoid\n- Benzoyl peroxide: kháng khuẩn"
