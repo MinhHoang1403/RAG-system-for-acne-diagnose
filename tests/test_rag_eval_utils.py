@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -30,6 +31,24 @@ from rag_eval_utils import (  # noqa: E402
 DATASET_PATH = PROJECT_ROOT / "notebooks" / "eval_data" / "acne_rag_eval_set.jsonl"
 NOTEBOOK_PATH = PROJECT_ROOT / "notebooks" / "rag_llm_judge.ipynb"
 BUILD_EVAL_SET_PATH = PROJECT_ROOT / "notebooks" / "eval_data" / "build_acne_eval_set.py"
+
+
+def _notebook_cells() -> list[dict]:
+    notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
+    return notebook.get("cells", [])
+
+
+def _cell_source(cell: dict) -> str:
+    return "".join(cell.get("source", []))
+
+
+def _assignment_cells(name: str) -> list[tuple[int, str]]:
+    cells = []
+    pattern = re.compile(rf"^\s*{re.escape(name)}\s*=", re.MULTILINE)
+    for index, cell in enumerate(_notebook_cells()):
+        if cell.get("cell_type") == "code" and pattern.search(_cell_source(cell)):
+            cells.append((index, _cell_source(cell)))
+    return cells
 
 
 def test_dataset_has_exactly_300_unique_cases() -> None:
@@ -102,8 +121,8 @@ def test_notebook_validates_dataset_ids_before_case_lookup() -> None:
 
 
 def test_notebook_defaults_to_ollama_judge_provider() -> None:
-    notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
-    text = "\n".join("".join(cell.get("source", [])) for cell in notebook.get("cells", []))
+    cells = _notebook_cells()
+    text = "\n".join(_cell_source(cell) for cell in cells)
 
     required = [
         'JUDGE_PROVIDER = "ollama"',
@@ -120,6 +139,7 @@ def test_notebook_defaults_to_ollama_judge_provider() -> None:
         'judge_provider == "ollama"',
         "judge_call = call_ollama_judge",
         "Judge provider:",
+        "LLM-as-Judge configuration:",
         '"judge_provider": judge_provider',
         '"judge_model": judge_model',
         '"judge_error": last_error',
@@ -129,8 +149,62 @@ def test_notebook_defaults_to_ollama_judge_provider() -> None:
 
     assert 'judge_provider != "gemini"' not in text
 
-    for index, cell in enumerate(notebook.get("cells", []), 1):
+    for index, cell in enumerate(cells, 1):
         assert not cell.get("outputs"), f"Notebook output not cleared in cell {index}"
+        assert cell.get("execution_count") is None, f"Execution count not cleared in cell {index}"
+
+
+def test_notebook_has_single_top_configuration_cell() -> None:
+    cells = _notebook_cells()
+    text = "\n".join(_cell_source(cell) for cell in cells)
+
+    assert "## 1. Configuration" in text
+    assert "edit this cell only" in text
+    assert "VS Code save warning" in text
+    assert "do not click Overwrite immediately" in text
+    assert "Notebook configuration loaded:" in text
+
+    config_vars = [
+        "API_BASE_URL",
+        "RUN_LIVE_EVAL",
+        "QUESTION_LIMIT",
+        "REQUEST_TIMEOUT_SECONDS",
+        "SLEEP_BETWEEN_REQUESTS_SECONDS",
+        "USE_SAVED_RESULTS_IF_AVAILABLE",
+        "SAVE_RAW_RESPONSES",
+        "DATASET_PATH",
+        "SAVED_RAW_RESPONSES_PATH",
+        "REPORT_ROOT",
+        "RUN_LLM_JUDGE",
+        "JUDGE_PROVIDER",
+        "JUDGE_SAMPLE_SIZE",
+        "JUDGE_RANDOM_SEED",
+        "JUDGE_SCORE_THRESHOLD",
+        "JUDGE_DISAGREEMENT_THRESHOLD",
+        "JUDGE_SLEEP_SECONDS",
+        "JUDGE_CACHE_PATH",
+        "JUDGE_OLLAMA_BASE_URL",
+        "JUDGE_OLLAMA_MODEL",
+        "JUDGE_OLLAMA_TIMEOUT_SECONDS",
+    ]
+
+    locations = {}
+    for var in config_vars:
+        assignments = _assignment_cells(var)
+        assert len(assignments) == 1, f"{var} assignment count should be 1, got {assignments}"
+        locations[var] = assignments[0][0]
+
+    unique_config_cells = set(locations.values())
+    assert len(unique_config_cells) == 1, f"Config assignments split across cells: {locations}"
+
+    config_cell_index = unique_config_cells.pop()
+    config_source = _cell_source(cells[config_cell_index])
+    assert config_cell_index <= 2
+    assert 'RUN_LIVE_EVAL = False' in config_source
+    assert 'RUN_LLM_JUDGE = False' in config_source
+    assert 'JUDGE_PROVIDER = "ollama"' in config_source
+    assert "SAVED_RAW_RESPONSES_PATH = None" in config_source
+    assert "API_BASE_URL" in config_source and "JUDGE_PROVIDER" in config_source
 
 
 def test_markdown_table_detection() -> None:
